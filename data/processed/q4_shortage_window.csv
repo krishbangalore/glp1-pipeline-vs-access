@@ -1,0 +1,5 @@
+drug_name,shortage_start,shortage_end,shortage_months,notes
+semaglutide,2022-03-01,2025-02-21,35.7,FDA removed from shortage list Feb 21 2025. Compounding no longer legal as of that date.
+liraglutide,2022-06-01,2024-06-01,24.0,Shorter shortage period; less compounding activity.
+dulaglutide,2022-09-01,2023-08-01,11.0,Resolved relatively quickly; limited compounding window.
+tirzepatide,2022-10-01,2024-10-02,24.0,FDA removed from shortage list Oct 2 2024 for all doses. 503A pharmacies given 60-day wind-down; 503B given 90-day wind-down.
