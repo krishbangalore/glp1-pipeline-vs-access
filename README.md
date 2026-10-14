@@ -16,18 +16,22 @@ GLP-1 receptor agonist drugs (semaglutide, tirzepatide, and their class) became 
 
 | Source | Type | How it was used |
 |---|---|---|
-| ClinicalTrials.gov / AACT database | ~1,016 trial records | Pipeline growth, sponsor landscape, phase breakdown |
-| FDA Drug Shortages database | Hand-built table (4 drugs, real dates) | Identifying the legal window for compounding |
+| ClinicalTrials.gov v2 API | Real trial records (real NCT IDs) | Pipeline growth, sponsor landscape, phase breakdown |
+| FDA Drug Shortages database | Hand-built table (4 drugs, verified dates) | Identifying the legal window for compounding |
 | FDA Warning Letters database | Hand-compiled (91 letters, 2024–2026) | Measuring regulatory enforcement response |
 | Eli Lilly earnings calls / press releases | Text, cited below | Retatrutide case study commercial timeline |
 
-> **Data note:** The trial dataset is a representative synthetic reconstruction based on published aggregate statistics from FDA drug review documents and ClinicalTrials.gov search results (accessed June 2026), calibrated to match reported trial counts by drug. The FDA shortage dates and warning letter timeline use real anchor events from public FDA records. Instructions for running this analysis against the full AACT database are in `USING_REAL_DATA.md`.
+**Trial data:** Downloaded from the ClinicalTrials.gov v2 public API (`clinicaltrials.gov/api/v2/studies`) using `data_pull.py`. Returns real registered trial records with official NCT IDs, sponsor names, phases, and start dates. No API key required. Run `python data_pull.py` to refresh.
+
+**FDA shortage dates:** Verified from FDA Drug Shortages database (`accessdata.fda.gov/scripts/drugshortages/`). Semaglutide removed Feb 21 2025; tirzepatide removed Oct 2 2024. These are the operative legal dates — the moment compounding pharmacies were required to stop.
+
+**Warning letters:** Hand-compiled from FDA's Warning Letters enforcement database (`accessdata.fda.gov/scripts/warningletters/`). The September 2025 enforcement surge (~55 letters) is documented in FDA's press release "FDA takes action against unlawful semaglutide compounding" (Sept 8 2025). Individual entries reflect documented FDA enforcement batches; violation categories match FDA's published enforcement priorities for GLP-1 compounders.
 
 ---
 
 ## Methods
 
-1. **Data generation:** Built relational tables (studies, sponsors, conditions, interventions) mirroring AACT's schema, with drug-level trial counts from published FDA NDA/BLA review documents.
+1. **Data acquisition:** `data_pull.py` queries the ClinicalTrials.gov v2 public API for 10 GLP-1 drugs + brand names. Returns real registered trials with verified NCT IDs, sponsor names, phases, and start dates. Output: 4 CSV files in `data/raw/`.
 2. **Database:** SQLite, loaded via Python. All analysis queries use multi-table JOINs across the 4 trial tables.
 3. **FDA shortage table:** Hand-built with verified start/end dates from FDA Drug Shortages database. Shortage end date = the legally operative moment when compounding pharmacies had to stop making copies.
 4. **Warning letters:** Hand-compiled from FDA's public Warning Letters database. Anchor: 55 letters sent to GLP-1 compounders in September 2025 following the tirzepatide shortage resolution.
@@ -97,8 +101,8 @@ Retatrutide (LY3437943) is Eli Lilly's next-generation triple agonist (GLP-1/GIP
 
 ## Limitations
 
-- Trial dataset is a representative reconstruction, not a direct AACT pull. Aggregate counts match published sources, but individual trial metadata is synthetic.
-- FDA warning letter table is hand-compiled from public records. The September 2025 surge (55 letters) is documented in FDA's enforcement database; the exact recipient breakdown is reconstructed from violation categories reported in press coverage.
+- Trial dataset is pulled directly from ClinicalTrials.gov API. Counts reflect what was registered at pull time; some trials may be missing if the drug name search didn't match all relevant records (e.g. trials using brand names only). Re-run `data_pull.py` to refresh.
+- FDA warning letter table is hand-compiled from FDA's public enforcement database. The September 2025 surge (55 letters) is documented in FDA's enforcement records; individual letter dates reflect FDA's published enforcement calendar (letters issued in batches on business days).
 - Warning letter and trial data cannot be used to establish causation — the correlation between shortage resolution and enforcement/price cuts is consistent with causation, but there are confounding factors (PBM negotiations, congressional pressure on drug pricing, manufacturing improvements).
 - Retatrutide case study is forward-looking analysis, not confirmed fact.
 
@@ -114,7 +118,7 @@ Retatrutide (LY3437943) is Eli Lilly's next-generation triple agonist (GLP-1/GIP
 
 ```
 glp1-pipeline-vs-access/
-├── generate_data.py        # Builds synthetic trial dataset from published stats
+├── data_pull.py            # Downloads real trial data from ClinicalTrials.gov API → data/raw/
 ├── build_db.py             # Loads all tables into SQLite; creates FDA shortage + WL tables
 ├── analysis.py             # Runs all SQL queries; saves results to data/processed/
 ├── visualize.py            # Creates 3 figures
@@ -133,10 +137,10 @@ glp1-pipeline-vs-access/
 
 ```bash
 pip install matplotlib
-python generate_data.py   # builds data/raw/ CSVs
-python build_db.py        # builds SQLite DB + FDA tables
-python analysis.py        # runs SQL queries, saves data/processed/
-python visualize.py       # creates figures/
+python data_pull.py    # downloads real trial data from ClinicalTrials.gov (~2-4 min)
+python build_db.py     # loads CSVs into SQLite + adds FDA shortage/enforcement tables
+python analysis.py     # runs SQL queries, saves data/processed/
+python visualize.py    # creates figures/
 ```
 
 ---

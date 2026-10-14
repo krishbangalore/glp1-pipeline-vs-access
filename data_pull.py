@@ -1,7 +1,18 @@
 """
 GLP-1 Pipeline vs. Accessibility — Data Acquisition
-Pulls clinical trial data from ClinicalTrials.gov v2 API.
+Pulls real clinical trial data from the ClinicalTrials.gov v2 API.
 Outputs: data/raw/studies.csv, sponsors.csv, conditions.csv, interventions.csv
+
+Run this FIRST before build_db.py:
+    python data_pull.py
+
+Requires internet access. No external dependencies (uses stdlib urllib only).
+Typical runtime: 2–4 minutes (API rate limiting + pagination).
+
+Data source: ClinicalTrials.gov v2 API (clinicaltrials.gov/api/v2/studies)
+  - Official NIH registry; includes all GLP-1 drug trials publicly registered
+  - Returns real NCT IDs, sponsor names, phases, start dates
+  - Accessed via ClinicalTrials.gov public API (no API key required)
 """
 
 import urllib.request
@@ -39,7 +50,7 @@ FIELDS = ",".join([
 def fetch_page(drug, page_token=None):
     params = {
         "query.intr": drug,
-        "pageSize": "1000",
+        "pageSize": "200",   # CT.gov allows up to 1000; 200 is safer for timeout avoidance
         "fields": FIELDS,
     }
     if page_token:
