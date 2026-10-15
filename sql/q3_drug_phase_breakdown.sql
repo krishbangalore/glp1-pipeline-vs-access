@@ -4,7 +4,7 @@ SELECT
         COUNT(DISTINCT s.nct_id)                                 AS trial_count,
         MIN(CAST(SUBSTR(s.start_date,1,4) AS INT))               AS first_trial_year,
         MAX(CAST(SUBSTR(s.start_date,1,4) AS INT))               AS latest_trial_year
-    FROM studies s
+    FROM studies_in_scope s
     JOIN interventions i ON s.nct_id = i.nct_id
     WHERE LOWER(i.intervention_type) = 'drug'
       AND LOWER(i.intervention_name) IN (

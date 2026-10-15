@@ -1,6 +1,7 @@
 """
 GLP-1 Pipeline vs. Accessibility — Database Builder
-Loads trial CSVs + hand-built FDA tables into SQLite.
+Loads trial CSVs (from ClinicalTrials.gov) + hand-entered, cited FDA/Lilly
+event tables into SQLite.
 Outputs: glp1_analysis.db
 """
 
@@ -8,8 +9,13 @@ import sqlite3
 import csv
 import os
 
-DB = "/tmp/glp1_analysis.db"
+DB = "glp1_analysis.db"
 RAW = "data/raw"
+
+# Last start year kept in the analysis. Trials with planned starts after this
+# are dropped. 2026 itself is partial: data/raw/ was pulled on PULL_DATE.
+LAST_YEAR = 2026
+PULL_DATE = "2026-10-14"
 
 
 def load_csv(path):
@@ -18,8 +24,9 @@ def load_csv(path):
 
 
 def build_db():
-    if os.path.exists(DB):
-        os.remove(DB)
+    for path in (DB, DB + "-journal"):
+        if os.path.exists(path):
+            os.remove(path)
 
     conn = sqlite3.connect(DB)
     c = conn.cursor()
@@ -84,287 +91,156 @@ def build_db():
     print(f"  Loaded {c.execute('SELECT COUNT(*) FROM sponsors').fetchone()[0]} sponsor records")
     print(f"  Loaded {c.execute('SELECT COUNT(*) FROM interventions').fetchone()[0]} intervention records")
 
-    # ── FDA Shortage Status (hand-built from FDA Drug Shortages database) ───
-    # Source: accessdata.fda.gov/scripts/drugshortages/
-    # This table captures when semaglutide/tirzepatide were on the shortage list —
-    # the ONLY period when compounding pharmacies could legally make copies.
+    # ════════════════════════════════════════════════════════════════════════
+    # HAND-ENTERED TABLES
+    # Everything below this line is typed in by hand, not pulled from an API.
+    # Each row carries the source it was taken from. Nothing here is generated
+    # or interpolated: if an event could not be tied to a source, it is not in
+    # the table.
+    # ════════════════════════════════════════════════════════════════════════
+
+    # ── FDA Shortage Status (hand-entered from FDA declaratory orders) ──────
+    # Only semaglutide and tirzepatide are included. Earlier versions also had
+    # liraglutide (2022-06 → 2024-06) and dulaglutide (2022-09 → 2023-08), but
+    # those dates had no source and contradict FDA's own Dec 2024 status
+    # (both still listed as "in shortage"), so they were removed.
+    #
+    # start_precision: 'month' means FDA's order gives only the month; the
+    # date is stored as the 1st of that month.
 
     c.execute("""
         CREATE TABLE shortage_status (
-            drug_name       TEXT,
-            shortage_start  TEXT,
-            shortage_end    TEXT,
-            notes           TEXT
+            drug_name           TEXT,
+            shortage_start      TEXT,
+            start_precision     TEXT,
+            shortage_end        TEXT,
+            wind_down_503a_end  TEXT,
+            wind_down_503b_end  TEXT,
+            notes               TEXT,
+            source_url          TEXT
         )
     """)
 
     shortage_data = [
-        ("semaglutide",   "2022-03-01", "2025-02-21",
-         "FDA removed from shortage list Feb 21 2025. Compounding no longer legal as of that date."),
-        ("tirzepatide",   "2022-10-01", "2024-10-02",
-         "FDA removed from shortage list Oct 2 2024 for all doses. 503A pharmacies given 60-day wind-down; 503B given 90-day wind-down."),
-        ("liraglutide",   "2022-06-01", "2024-06-01",
-         "Shorter shortage period; less compounding activity."),
-        ("dulaglutide",   "2022-09-01", "2023-08-01",
-         "Resolved relatively quickly; limited compounding window."),
+        ("semaglutide", "2022-03-01", "month", "2025-02-21", "2025-04-22", "2025-05-22",
+         "First listed Mar 2022 (Wegovy) and Aug 2022 (Ozempic). FDA order of Feb 21 2025 "
+         "declared the shortage resolved; enforcement discretion ran to Apr 22 2025 (503A) "
+         "and May 22 2025 (503B).",
+         "https://www.fda.gov/media/185526/download"),
+        ("tirzepatide", "2022-12-15", "day", "2024-12-19", "2025-02-18", "2025-03-19",
+         "Listed Dec 15 2022. FDA first removed it Oct 2 2024; after the Outsourcing "
+         "Facilities Association sued, FDA re-evaluated and on Dec 19 2024 issued an order "
+         "that revoked and replaced the Oct 2 decision. Enforcement discretion ran to "
+         "Feb 18 2025 (503A) and Mar 19 2025 (503B).",
+         "https://www.fda.gov/media/184606/download"),
     ]
 
-    c.executemany("INSERT INTO shortage_status VALUES (?,?,?,?)", shortage_data)
+    c.executemany("INSERT INTO shortage_status VALUES (?,?,?,?,?,?,?,?)", shortage_data)
 
-    # April 30 2026: FDA proposed permanently excluding semaglutide, tirzepatide,
-    # and liraglutide from the 503B bulks list — meaning even if shortage recurs,
-    # 503B compounders could not produce them.
+    # ── Policy and pricing events (hand-entered, each with a source) ────────
     c.execute("""
         CREATE TABLE policy_events (
             event_date  TEXT,
             event_type  TEXT,
-            description TEXT
+            description TEXT,
+            source_url  TEXT
         )
     """)
 
     policy_events = [
+        ("2024-01-04", "LILLY_ACCESS",
+         "Lilly launches LillyDirect (direct-to-patient telehealth links + home delivery).",
+         "https://investor.lilly.com/node/50106"),
+        ("2024-08-27", "LILLY_PRICE",
+         "Lilly launches Zepbound single-dose vials on LillyDirect for self-pay patients: "
+         "$399/mo (2.5 mg), $549/mo (5 mg).",
+         "https://www.healthcare-brew.com/stories/2024/08/30/eli-lilly-selling-discounted-single-dose-vials-glp1-drug-zepbound"),
         ("2024-10-02", "SHORTAGE_RESOLVED",
-         "FDA removes tirzepatide from drug shortage list — all dose strengths."),
+         "FDA removes tirzepatide from the shortage list (decision later revoked and replaced on Dec 19 2024).",
+         "https://www.foley.com/insights/publications/2024/10/fda-removes-lillys-zepbound-mounjaro-tirzepatide-injection-drug-shortage-list/"),
+        ("2024-12-19", "SHORTAGE_RESOLVED",
+         "FDA order reaffirms tirzepatide shortage is resolved.",
+         "https://www.fda.gov/media/184606/download"),
         ("2025-02-21", "SHORTAGE_RESOLVED",
-         "FDA removes semaglutide from drug shortage list."),
-        ("2025-02-01", "PRICE_CUT",
-         "Eli Lilly launches Zepbound vials at $399/month (vs ~$1,060 branded pen) as compounding competition escalates."),
-        ("2025-12-01", "PRICE_CUT",
-         "Eli Lilly cuts Zepbound list price further; launches direct-to-consumer LillyDirect access program."),
+         "FDA order declares semaglutide shortage resolved.",
+         "https://www.fda.gov/media/185526/download"),
+        ("2025-02-25", "LILLY_PRICE",
+         "Lilly adds 7.5 mg and 10 mg Zepbound vials at $499/mo; cuts 2.5 mg to $349 and 5 mg to $499.",
+         "https://investor.lilly.com/node/52091"),
+        ("2025-12-01", "LILLY_PRICE",
+         "Lilly cuts Zepbound vial self-pay prices to $299 (2.5 mg), $399 (5 mg), $449 (higher doses).",
+         "https://www.fiercepharma.com/marketing/lilly-joins-novo-glp-1-self-pay-price-cuts-lowering-costs-single-dose-zepbound-vials"),
         ("2026-04-30", "FDA_PROPOSED_RULE",
-         "FDA proposes permanently excluding semaglutide, tirzepatide, and liraglutide from 503B bulks list — closing compounding pathway even if shortage recurs."),
+         "FDA proposes excluding semaglutide, tirzepatide and liraglutide from the 503B bulks list.",
+         "https://www.fda.gov/news-events/press-announcements/fda-proposes-exclude-semaglutide-tirzepatide-and-liraglutide-503b-bulks-list"),
     ]
 
-    c.executemany("INSERT INTO policy_events VALUES (?,?,?)", policy_events)
+    c.executemany("INSERT INTO policy_events VALUES (?,?,?,?)", policy_events)
 
-    # ── FDA Warning Letters (hand-compiled from FDA Warning Letters database) ─
-    # Source: fda.gov/inspections-compliance-enforcement-and-criminal-investigations/
-    #         compliance-actions-and-activities/warning-letters
+    # ── FDA enforcement events (hand-entered, each with a source) ───────────
+    # This REPLACES the earlier 91-row `warning_letters` table. Those rows were
+    # constructed, not compiled: the per-letter dates, recipient types and
+    # violation categories were invented to fill out batch totals, and the
+    # "Sept 8 2025 press release" they cited does not exist.
     #
-    # Enforcement timeline documented in FDA press releases and enforcement database:
-    # - 2024: ~10 letters (initial enforcement; adulteration/safety issues)
-    # - Sept 2025: ~55 letters in single enforcement surge (largest ever against compounders)
-    #   Trigger: semaglutide shortage resolved Feb 21 2025; 6-month wind-down ended Sept 2025
-    # - Oct–Dec 2025: Additional letters continuing through year-end
-    # - 2026: Ongoing enforcement following April 30 2026 proposed 503B exclusion rule
-    #
-    # Individual letter dates compiled from:
-    # - FDA's Warning Letters search database (searchable by subject/product)
-    #   https://www.fda.gov/inspections-compliance-enforcement-and-criminal-investigations/
-    #   compliance-actions-and-activities/warning-letters
-    # - FDA press release: "FDA issues warning letters to compounders of semaglutide" (Sept 2025)
-    # - FDA enforcement reports archived at accessdata.fda.gov/scripts/warningletters/
-    #
-    # Violation categories reflect FDA's documented enforcement priorities for GLP-1 compounders.
+    # One row per documented batch of GLP-1 warning letters. Counts are what
+    # the cited source reports; count_source says how firm that number is.
+    # letter_date = the date printed on the letters in FDA's database.
 
     c.execute("""
-        CREATE TABLE warning_letters (
-            letter_id       INTEGER PRIMARY KEY,
-            issue_date      TEXT,
-            recipient_type  TEXT,
-            drug_named      TEXT,
-            violation_type  TEXT,
-            notes           TEXT
+        CREATE TABLE enforcement_events (
+            letter_date     TEXT,
+            announced_date  TEXT,
+            letter_count    INTEGER,
+            count_source    TEXT,
+            recipients      TEXT,
+            description     TEXT,
+            source_url      TEXT
         )
     """)
 
-    # Hand-compiled from FDA enforcement records.
-    # Each entry represents a documented enforcement batch; specific dates reflect
-    # FDA's published enforcement calendar (letters issued in batches on business days).
-    # September 2025 batch (55 letters) is the single best-documented enforcement action;
-    # remaining entries reflect documented enforcement activity per FDA annual summary reports.
-    warning_letters_data = [
-        # ── 2024: Initial enforcement (adulteration / safety concerns) ──────────
-        # FDA began enforcement in early 2024 citing adulteration and sterility failures
-        # before shortage resolution — these were safety-based, not shortage-resolution-based.
-        ("2024-03-14", "503B Outsourcing Facility", "tirzepatide",
-         "Adulteration / lack of sterility assurance",
-         "503B facility; product failed sterility testing per USP <797>"),
-        ("2024-05-08", "503A Pharmacy",             "semaglutide",
-         "Adulteration / lack of sterility assurance",
-         "503A pharmacy; compounded injectable lacked required sterility documentation"),
-        ("2024-06-17", "Online Pharmacy",            "semaglutide",
-         "Misbranding — false strength claims",
-         "Labeled product as 'semaglutide 2.4mg' without clinical evidence of bioequivalence"),
-        ("2024-07-02", "Compounding Pharmacy",       "tirzepatide",
-         "Drug not identical to approved drug",
-         "Compounded tirzepatide with unauthorized excipients not in approved labeling"),
-        ("2024-07-22", "503A Pharmacy",              "semaglutide",
-         "Compounding from bulk substance not on 503A list",
-         "Semaglutide bulk API not on FDA's 503A bulks list at time of compounding"),
-        ("2024-08-06", "503B Outsourcing Facility", "semaglutide",
-         "Adulteration / lack of sterility assurance",
-         "Environmental monitoring failures; three separate lots recalled"),
-        ("2024-09-11", "Online Pharmacy",            "tirzepatide",
-         "Misbranding — false strength claims",
-         "Product marketed as equivalent to Zepbound without bioequivalence data"),
-        ("2024-10-17", "Compounding Pharmacy",       "semaglutide",
-         "Compounding after shortage resolved",
-         "Continued compounding tirzepatide after Oct 2 2024 shortage resolution; 60-day window not honored"),
-        ("2024-11-04", "503A Pharmacy",              "tirzepatide",
-         "Compounding after shortage resolved",
-         "Tirzepatide shortage resolved Oct 2 2024; letter issued after 60-day wind-down expired"),
-        ("2024-12-09", "503B Outsourcing Facility", "tirzepatide",
-         "503B compounder without outsourcing facility registration",
-         "Operating as 503B without valid FDA registration; products distributed interstate"),
-
-        # ── 2025 Q1-Q2: Post-tirzepatide, pre-semaglutide enforcement ─────────
-        ("2025-03-12", "Compounding Pharmacy",       "semaglutide",
-         "Compounding after shortage resolved",
-         "Semaglutide shortage resolved Feb 21 2025; 60-day 503A wind-down clock started"),
-        ("2025-04-03", "Online Pharmacy",            "semaglutide",
-         "Misbranding — false strength claims",
-         "Online retailer selling compounded semaglutide as 'clinically equivalent to Wegovy'"),
-        ("2025-06-18", "503A Pharmacy",              "semaglutide",
-         "Compounding after shortage resolved",
-         "60-day wind-down (ending ~Apr 22 2025) elapsed; pharmacy continued dispensing"),
-        ("2025-07-29", "503B Outsourcing Facility", "semaglutide",
-         "Compounding after shortage resolved",
-         "503B 90-day wind-down (ending ~May 21 2025) elapsed; facility continued large-scale production"),
-
-        # ── Sept 2025: Major enforcement surge (~55 letters, largest single batch) ──
-        # FDA press release dated Sept 8 2025: "FDA takes action against unlawful semaglutide compounding"
-        # Letters issued Sept 8–26 2025 in coordinated enforcement action.
-        # Recipient breakdown per FDA press release: primarily 503A pharmacies and online pharmacies.
-        ("2025-09-08", "503A Pharmacy",              "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge — batch 1 of 55"),
-        ("2025-09-08", "503A Pharmacy",              "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-08", "Online Pharmacy",            "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-08", "Compounding Pharmacy",       "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-08", "503A Pharmacy",              "semaglutide", "Misbranding — false strength claims",  "Sept 2025 enforcement surge"),
-        ("2025-09-09", "503A Pharmacy",              "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-09", "Online Pharmacy",            "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-09", "Compounding Pharmacy",       "tirzepatide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-09", "503B Outsourcing Facility", "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-09", "503A Pharmacy",              "semaglutide", "Drug not identical to approved drug",  "Sept 2025 enforcement surge"),
-        ("2025-09-10", "503A Pharmacy",              "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-10", "Online Pharmacy",            "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-10", "Compounding Pharmacy",       "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-10", "503A Pharmacy",              "tirzepatide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-10", "503B Outsourcing Facility", "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-11", "503A Pharmacy",              "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-11", "Online Pharmacy",            "both",        "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-11", "Compounding Pharmacy",       "semaglutide", "Misbranding — false strength claims",  "Sept 2025 enforcement surge"),
-        ("2025-09-11", "503A Pharmacy",              "tirzepatide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-11", "503B Outsourcing Facility", "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-12", "503A Pharmacy",              "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-12", "Online Pharmacy",            "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-12", "Compounding Pharmacy",       "both",        "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-12", "503A Pharmacy",              "semaglutide", "Compounding without valid prescription","Sept 2025 enforcement surge"),
-        ("2025-09-12", "503B Outsourcing Facility", "tirzepatide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-15", "503A Pharmacy",              "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-15", "Online Pharmacy",            "semaglutide", "Drug not identical to approved drug",  "Sept 2025 enforcement surge"),
-        ("2025-09-15", "Compounding Pharmacy",       "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-15", "503A Pharmacy",              "both",        "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-15", "503B Outsourcing Facility", "semaglutide", "503B compounder without outsourcing facility registration", "Sept 2025 enforcement surge"),
-        ("2025-09-16", "503A Pharmacy",              "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-16", "Online Pharmacy",            "tirzepatide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-16", "Compounding Pharmacy",       "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-16", "503A Pharmacy",              "semaglutide", "Misbranding — false strength claims",  "Sept 2025 enforcement surge"),
-        ("2025-09-16", "503B Outsourcing Facility", "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-17", "503A Pharmacy",              "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-17", "Online Pharmacy",            "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-17", "Compounding Pharmacy",       "tirzepatide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-17", "503A Pharmacy",              "semaglutide", "Compounding without valid prescription","Sept 2025 enforcement surge"),
-        ("2025-09-17", "503B Outsourcing Facility", "both",        "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-18", "503A Pharmacy",              "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-18", "Online Pharmacy",            "semaglutide", "Drug not identical to approved drug",  "Sept 2025 enforcement surge"),
-        ("2025-09-18", "Compounding Pharmacy",       "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-18", "503A Pharmacy",              "tirzepatide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-19", "503A Pharmacy",              "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-19", "Online Pharmacy",            "both",        "Misbranding — false strength claims",  "Sept 2025 enforcement surge"),
-        ("2025-09-19", "Compounding Pharmacy",       "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-19", "503A Pharmacy",              "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-22", "503A Pharmacy",              "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-22", "Online Pharmacy",            "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-22", "Compounding Pharmacy",       "tirzepatide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-23", "503A Pharmacy",              "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-23", "Online Pharmacy",            "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-24", "503A Pharmacy",              "semaglutide", "Compounding after shortage resolved", "Sept 2025 enforcement surge"),
-        ("2025-09-24", "Compounding Pharmacy",       "both",        "Compounding after shortage resolved", "Sept 2025 enforcement surge — final batch"),
-
-        # ── Oct–Dec 2025: Continued enforcement ───────────────────────────────
-        ("2025-10-14", "503B Outsourcing Facility", "semaglutide",
-         "Compounding after shortage resolved",
-         "Follow-up enforcement; facility had not ceased production after Sept 2025 warning"),
-        ("2025-11-06", "Online Pharmacy",            "semaglutide",
-         "Compounding after shortage resolved",
-         "Online pharmacy continued selling compounded semaglutide with new labeling"),
-
-        # ── 2026: Ongoing enforcement; increased focus on 503B operators ──────
-        ("2026-01-13", "503B Outsourcing Facility", "semaglutide",
-         "Compounding after shortage resolved",
-         "503B outsourcing facility; continued large-scale production after shortage resolved"),
-        ("2026-01-28", "503A Pharmacy",              "tirzepatide",
-         "Compounding from bulk substance not on 503A list",
-         "503A pharmacy; tirzepatide bulk API not on authorized list"),
-        ("2026-02-10", "Online Pharmacy",            "semaglutide",
-         "Misbranding — false strength claims",
-         "Product marketed at false dosage strength"),
-        ("2026-02-25", "Compounding Pharmacy",       "both",
-         "Compounding after shortage resolved",
-         "Ongoing compounding of both semaglutide and tirzepatide"),
-        ("2026-03-04", "503B Outsourcing Facility", "semaglutide",
-         "Adulteration / lack of sterility assurance",
-         "Sterility failure in compounded injectable; product distributed to multiple states"),
-        ("2026-03-17", "503A Pharmacy",              "semaglutide",
-         "Compounding after shortage resolved",
-         "Continued violations after two prior warning letters"),
-        ("2026-04-01", "Online Pharmacy",            "tirzepatide",
-         "Drug not identical to approved drug",
-         "Compounded with added B12 — not present in approved Zepbound formulation"),
-        ("2026-04-14", "Compounding Pharmacy",       "semaglutide",
-         "Compounding from bulk substance not on 503A list",
-         "Post-proposed-rule enforcement; FDA proposed 503B permanent exclusion Apr 30 2026"),
-        ("2026-05-05", "503B Outsourcing Facility", "semaglutide",
-         "Compounding after shortage resolved",
-         "Large 503B operator; multiple interstate shipments after shortage resolution"),
-        ("2026-05-19", "Online Pharmacy",            "both",
-         "Misbranding — false strength claims",
-         "False 'bioidentical' marketing claims"),
-        ("2026-06-02", "503A Pharmacy",              "semaglutide",
-         "Compounding after shortage resolved",
-         "FDA enforcement consistent with proposed permanent 503B exclusion"),
-        ("2026-06-09", "Compounding Pharmacy",       "tirzepatide",
-         "Compounding after shortage resolved",
-         "Post-tirzepatide-shortage continued compounding"),
-        ("2026-06-16", "503B Outsourcing Facility", "semaglutide",
-         "503B compounder without outsourcing facility registration",
-         "Operating without valid FDA outsourcing facility registration"),
-        ("2026-06-23", "Online Pharmacy",            "semaglutide",
-         "Compounding after shortage resolved",
-         "Telehealth platform with in-house compounding pharmacy"),
-        ("2026-06-30", "503A Pharmacy",              "both",
-         "Compounding after shortage resolved",
-         "Mid-2026 enforcement; FDA proposed exclusion rule pending final action"),
-        ("2026-07-08", "Compounding Pharmacy",       "semaglutide",
-         "Adulteration / lack of sterility assurance",
-         "Contaminated lot detected during routine inspection"),
-        ("2026-07-14", "503B Outsourcing Facility", "tirzepatide",
-         "Compounding after shortage resolved",
-         "Continued 503B production despite shortage resolution 21 months prior"),
-        ("2026-07-21", "Online Pharmacy",            "semaglutide",
-         "Misbranding — false strength claims",
-         "Product labeled as semaglutide 2.4mg; actual concentration unverified"),
-        ("2026-07-28", "503A Pharmacy",              "semaglutide",
-         "Compounding after shortage resolved",
-         "Third warning letter issued to same pharmacy"),
-        ("2026-08-04", "Compounding Pharmacy",       "both",
-         "Drug not identical to approved drug",
-         "Compounded with tirzepatide + semaglutide combination not in any approved drug"),
-        ("2026-08-11", "503B Outsourcing Facility", "semaglutide",
-         "Compounding after shortage resolved",
-         "Ongoing enforcement action; injunction proceedings initiated"),
-        ("2026-08-18", "Online Pharmacy",            "tirzepatide",
-         "Compounding after shortage resolved",
-         "Telehealth-linked pharmacy; continued dispensing post-shortage"),
+    enforcement_events = [
+        ("2025-09-09", "2025-09-09", 50,
+         "approx.; Hims & Hers FY2025 10-K says 'approximately 50 companies'; trade press reports 40 to 55+",
+         "Telehealth platforms, wellness clinics, compounders",
+         "Part of HHS/FDA crackdown on misleading DTC drug ads. Letters (e.g. Hims & Hers, "
+         "file 716567) cite claims that compounded semaglutide/tirzepatide is the same as "
+         "approved drugs. Posted to FDA database ~Sept 16 2025.",
+         "https://www.fda.gov/inspections-compliance-enforcement-and-criminal-investigations/warning-letters/hims-hers-health-inc-dba-hims-716567-09092025"),
+        ("2026-02-20", "2026-03-03", 30,
+         "FDA press release",
+         "Telehealth companies",
+         "FDA's 'second group' of telehealth GLP-1 letters: sameness claims and telehealth-"
+         "branded labels that obscure who compounded the drug.",
+         "https://www.fda.gov/news-events/press-announcements/fda-warns-30-telehealth-companies-against-illegal-marketing-compounded-glp-1s"),
+        ("2026-06-08", "2026-06-16", 25,
+         "secondary source (Mondaq, Jul 9 2026); no FDA press release found",
+         "Telehealth companies",
+         "Further letters on false/misleading claims for compounded semaglutide and "
+         "tirzepatide (e.g. Altru Telehealth, file 728274).",
+         "https://www.mondaq.com/unitedstates/healthcare/1814666/fda-takes-aim-at-misleading-online-claims-for-compounded-glp-1-drugs"),
     ]
 
-    for i, row in enumerate(warning_letters_data, 1):
-        c.execute("INSERT INTO warning_letters VALUES (?,?,?,?,?,?)",
-                  (i, row[0], row[1], row[2], row[3], row[4]))
+    c.executemany("INSERT INTO enforcement_events VALUES (?,?,?,?,?,?,?)", enforcement_events)
 
     print(f"  Loaded {c.execute('SELECT COUNT(*) FROM shortage_status').fetchone()[0]} shortage records")
-    print(f"  Loaded {c.execute('SELECT COUNT(*) FROM warning_letters').fetchone()[0]} warning letter records")
+    print(f"  Loaded {c.execute('SELECT COUNT(*) FROM enforcement_events').fetchone()[0]} enforcement events")
+
+    # ── Analysis scope ───────────────────────────────────────────────────────
+    # The raw pull keeps everything; analysis uses only:
+    #   - interventional studies (drops 434 observational + 4 expanded-access)
+    #   - start dates through LAST_YEAR (drops 18 interventional trials with planned
+    #     starts in 2027–28, plus 7 with no start date)
+    # 2026 is a partial year: it covers registrations up to the pull date
+    # (PULL_DATE) and includes trials whose planned start is later in 2026.
+    c.execute(f"""
+        CREATE VIEW studies_in_scope AS
+        SELECT *
+        FROM studies
+        WHERE study_type = 'INTERVENTIONAL'
+          AND start_date <> ''
+          AND CAST(SUBSTR(start_date, 1, 4) AS INTEGER) <= {LAST_YEAR}
+    """)
 
     # ── Core joined view ─────────────────────────────────────────────────────
     c.execute("""
@@ -380,11 +256,14 @@ def build_db():
             sp.lead_sponsor_name,
             sp.lead_sponsor_class,
             i.intervention_name
-        FROM studies s
+        FROM studies_in_scope s
         JOIN sponsors sp ON s.nct_id = sp.nct_id
         JOIN interventions i ON s.nct_id = i.nct_id
         WHERE LOWER(i.intervention_type) = 'drug'
     """)
+
+    print(f"  In scope: {c.execute('SELECT COUNT(*) FROM studies_in_scope').fetchone()[0]} interventional studies "
+          f"starting ≤ {LAST_YEAR}")
 
     conn.commit()
     conn.close()

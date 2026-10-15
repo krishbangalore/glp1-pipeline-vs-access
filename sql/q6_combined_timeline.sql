@@ -5,8 +5,8 @@ WITH trial_counts AS (
         GROUP BY start_year
     ),
     letter_counts AS (
-        SELECT CAST(SUBSTR(issue_date,1,4) AS INT) AS year, COUNT(*) AS letters
-        FROM warning_letters
+        SELECT CAST(SUBSTR(letter_date,1,4) AS INT) AS year, SUM(letter_count) AS letters
+        FROM enforcement_events
         GROUP BY year
     )
     SELECT
@@ -15,10 +15,13 @@ WITH trial_counts AS (
         COALESCE(l.letters, 0)  AS warning_letters,
         CASE
             WHEN t.year BETWEEN 2022 AND 2024 THEN 'Shortage active (compounding legal)'
-            WHEN t.year = 2025              THEN 'Shortage resolved; enforcement surge'
-            WHEN t.year = 2026              THEN 'Post-shortage; FDA proposed 503B exclusion'
+            WHEN t.year = 2025              THEN 'Shortages resolved; wind-downs end; Sept letter batch'
+            WHEN t.year = 2026              THEN 'Post-shortage; FDA proposes 503B exclusion'
             ELSE 'Pre-shortage'
-        END                     AS period_label
+        END                     AS period_label,
+        CASE WHEN t.year = 2026 THEN 'partial (through 2026-10-14)'
+             ELSE 'full'
+        END                     AS year_coverage
     FROM trial_counts t
     LEFT JOIN letter_counts l ON t.year = l.year
     ORDER BY t.year;

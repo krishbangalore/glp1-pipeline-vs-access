@@ -9,5 +9,5 @@ SELECT
     FROM trials_clean
     WHERE start_year BETWEEN 2005 AND 2026
       AND phase NOT IN ('N/A', 'NA', '')
-    GROUP BY start_year, phase
-    ORDER BY start_year, phase;
+    GROUP BY 1, 2
+    ORDER BY 1, 2;

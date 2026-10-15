@@ -1,6 +1,8 @@
 """
 GLP-1 Pipeline vs. Accessibility — Core SQL Analysis
-Runs the 5 core sub-questions against the SQLite database.
+Runs the core sub-questions against the SQLite database.
+Trial queries use studies_in_scope / trials_clean (interventional only, starts
+through LAST_YEAR). LAST_YEAR is partial — data pulled PULL_DATE.
 Saves results to data/processed/ as CSVs for use in visualizations.
 """
 
@@ -8,7 +10,7 @@ import sqlite3
 import csv
 import os
 
-DB = "/tmp/glp1_analysis.db"
+from build_db import DB, LAST_YEAR, PULL_DATE
 OUT = "data/processed"
 SQL_DIR = "sql"
 os.makedirs(OUT, exist_ok=True)
@@ -39,7 +41,9 @@ def main():
     print("=" * 60)
 
     # ── Q1: Pipeline growth — trials started per year by phase ───────────────
-    sql_q1 = """
+    # GROUP BY 1, 2 groups on the relabelled phase, so EARLY_Phase 1 is merged
+    # into Phase 1 (grouping on the bare `phase` name left two Phase 1 rows).
+    sql_q1 = f"""
     SELECT
         start_year,
         CASE phase
@@ -49,10 +53,10 @@ def main():
         END AS phase,
         COUNT(DISTINCT nct_id) AS trial_count
     FROM trials_clean
-    WHERE start_year BETWEEN 2005 AND 2026
+    WHERE start_year BETWEEN 2005 AND {LAST_YEAR}
       AND phase NOT IN ('N/A', 'NA', '')
-    GROUP BY start_year, phase
-    ORDER BY start_year, phase;
+    GROUP BY 1, 2
+    ORDER BY 1, 2;
     """
 
     cols, rows = run_query(conn, "q1_pipeline_growth", sql_q1)
@@ -69,8 +73,8 @@ def main():
         COUNT(DISTINCT s.nct_id)                               AS total_trials,
         SUM(CASE WHEN s.phase = 'Phase 3' THEN 1 ELSE 0 END)  AS phase3_trials,
         ROUND(100.0 * COUNT(DISTINCT s.nct_id) /
-              (SELECT COUNT(DISTINCT nct_id) FROM studies), 1) AS pct_of_total
-    FROM studies s
+              (SELECT COUNT(DISTINCT nct_id) FROM studies_in_scope), 1) AS pct_of_total
+    FROM studies_in_scope s
     JOIN sponsors sp ON s.nct_id = sp.nct_id
     GROUP BY sp.lead_sponsor_name
     HAVING total_trials >= 5
@@ -92,7 +96,7 @@ def main():
         COUNT(DISTINCT s.nct_id)                                 AS trial_count,
         MIN(CAST(SUBSTR(s.start_date,1,4) AS INT))               AS first_trial_year,
         MAX(CAST(SUBSTR(s.start_date,1,4) AS INT))               AS latest_trial_year
-    FROM studies s
+    FROM studies_in_scope s
     JOIN interventions i ON s.nct_id = i.nct_id
     WHERE LOWER(i.intervention_type) = 'drug'
       AND LOWER(i.intervention_name) IN (
@@ -115,11 +119,15 @@ def main():
     SELECT
         drug_name,
         shortage_start,
+        start_precision,
         shortage_end,
         ROUND(
             (JULIANDAY(shortage_end) - JULIANDAY(shortage_start)) / 30.44
         , 1) AS shortage_months,
-        notes
+        wind_down_503a_end,
+        wind_down_503b_end,
+        notes,
+        source_url
     FROM shortage_status
     ORDER BY shortage_start;
     """
@@ -127,38 +135,40 @@ def main():
     cols, rows = run_query(conn, "q4_shortage_window", sql_q4)
     print("\nQ4: FDA shortage windows (legal compounding period)")
     for r in rows:
-        print(f"  {r[0]:<16} {r[1]} → {r[2]}  ({r[3]} months)")
+        print(f"  {r[0]:<16} {r[1]} → {r[3]}  ({r[4]} months; 503B wind-down to {r[6]})")
 
-    # ── Q5: Warning letters — how did enforcement ramp up? ───────────────────
+    # ── Q5: Enforcement — documented FDA warning-letter batches ─────────────
+    # One row per cited batch (hand-entered in build_db.py). Counts are as
+    # reported by the source; see count_source for how firm each one is.
     sql_q5 = """
     SELECT
-        SUBSTR(issue_date, 1, 4)    AS year,
-        SUBSTR(issue_date, 1, 7)    AS month,
-        COUNT(*)                    AS letters_issued,
-        SUM(COUNT(*)) OVER (
-            ORDER BY SUBSTR(issue_date, 1, 7)
-        )                           AS cumulative_letters
-    FROM warning_letters
-    GROUP BY month
-    ORDER BY month;
+        letter_date,
+        announced_date,
+        letter_count,
+        SUM(letter_count) OVER (ORDER BY letter_date) AS cumulative_letters,
+        count_source,
+        recipients,
+        source_url
+    FROM enforcement_events
+    ORDER BY letter_date;
     """
 
-    cols, rows = run_query(conn, "q5_warning_letters", sql_q5)
-    print("\nQ5: Warning letters by month (sample)")
-    for r in rows[-8:]:
-        print(f"  {r[1]}  {r[2]:>4} letters  (cumulative: {r[3]})")
+    cols, rows = run_query(conn, "q5_enforcement_events", sql_q5)
+    print("\nQ5: Documented FDA warning-letter batches (GLP-1 compounding/marketing)")
+    for r in rows:
+        print(f"  {r[0]}  {r[2]:>3} letters  (cumulative: {r[3]})  [{r[4][:40]}]")
 
     # ── Q6: Combined timeline — shortage + enforcement by year ───────────────
-    sql_q6 = """
+    sql_q6 = f"""
     WITH trial_counts AS (
         SELECT start_year AS year, COUNT(DISTINCT nct_id) AS new_trials
         FROM trials_clean
-        WHERE start_year BETWEEN 2020 AND 2026
+        WHERE start_year BETWEEN 2020 AND {LAST_YEAR}
         GROUP BY start_year
     ),
     letter_counts AS (
-        SELECT CAST(SUBSTR(issue_date,1,4) AS INT) AS year, COUNT(*) AS letters
-        FROM warning_letters
+        SELECT CAST(SUBSTR(letter_date,1,4) AS INT) AS year, SUM(letter_count) AS letters
+        FROM enforcement_events
         GROUP BY year
     )
     SELECT
@@ -167,17 +177,20 @@ def main():
         COALESCE(l.letters, 0)  AS warning_letters,
         CASE
             WHEN t.year BETWEEN 2022 AND 2024 THEN 'Shortage active (compounding legal)'
-            WHEN t.year = 2025              THEN 'Shortage resolved; enforcement surge'
-            WHEN t.year = 2026              THEN 'Post-shortage; FDA proposed 503B exclusion'
+            WHEN t.year = 2025              THEN 'Shortages resolved; wind-downs end; Sept letter batch'
+            WHEN t.year = 2026              THEN 'Post-shortage; FDA proposes 503B exclusion'
             ELSE 'Pre-shortage'
-        END                     AS period_label
+        END                     AS period_label,
+        CASE WHEN t.year = {LAST_YEAR} THEN 'partial (through {PULL_DATE})'
+             ELSE 'full'
+        END                     AS year_coverage
     FROM trial_counts t
     LEFT JOIN letter_counts l ON t.year = l.year
     ORDER BY t.year;
     """
 
     cols, rows = run_query(conn, "q6_combined_timeline", sql_q6)
-    print("\nQ6: Combined timeline 2020-2026")
+    print(f"\nQ6: Combined timeline 2020-{LAST_YEAR} ({LAST_YEAR} partial, through {PULL_DATE})")
     print(f"  {'Year':<6} {'New Trials':>11} {'Letters':>9}  Status")
     for r in rows:
         print(f"  {r[0]:<6} {r[1]:>11} {r[2]:>9}  {r[3]}")

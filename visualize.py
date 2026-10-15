@@ -10,10 +10,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import matplotlib.ticker as mticker
+import matplotlib.dates
 from collections import defaultdict
 import os
+from datetime import date
 
-DB = "/tmp/glp1_analysis.db"
+from build_db import DB, LAST_YEAR, PULL_DATE
 FIGURES = "figures"
 os.makedirs(FIGURES, exist_ok=True)
 
@@ -39,6 +41,11 @@ def load_csv(path):
         return list(csv.DictReader(f))
 
 
+def year_pos(d):
+    """Map a date onto a yearly bar axis where year Y spans [Y-0.5, Y+0.5]."""
+    return d.year - 0.5 + (d.timetuple().tm_yday - 1) / 365.0
+
+
 # ── Chart 1: Trial pipeline growth by year (stacked bar by phase) ───────────
 def chart_pipeline_growth():
     rows = load_csv("data/processed/q1_pipeline_growth.csv")
@@ -58,19 +65,28 @@ def chart_pipeline_growth():
     for ph in phases:
         bars = ax.bar(years, data[ph], bottom=bottoms,
                       label=ph, color=PALETTE[ph], width=0.75, edgecolor="white", linewidth=0.5)
+        # LAST_YEAR is a partial year — hatch it so it doesn't read as a full-year count
+        for bar, yr in zip(bars, years):
+            if yr == LAST_YEAR:
+                bar.set_hatch("///")
+                bar.set_alpha(0.6)
         bottoms = [b + v for b, v in zip(bottoms, data[ph])]
 
-    # Shade the GLP-1 shortage period (approx 2022-mid-2025)
-    ax.axvspan(2021.5, 2025.3, alpha=0.08, color="#e8a020", zorder=0)
-    ax.text(2023.4, max(bottoms) * 0.97, "FDA shortage window\n(compounding legal)",
+    # Shade the semaglutide shortage (Mar 2022 → Feb 21 2025). Each bar spans
+    # its calendar year as [year - 0.5, year + 0.5].
+    ax.axvspan(year_pos(date(2022, 3, 1)), year_pos(date(2025, 2, 21)),
+               alpha=0.08, color="#e8a020", zorder=0)
+    ax.text(2023.1, max(bottoms) * 0.97, "Semaglutide on FDA shortage list\n(Mar 2022 – Feb 2025)",
             ha="center", va="top", fontsize=8, color="#b07010", style="italic")
+    ax.text(LAST_YEAR, bottoms[-1] + max(bottoms) * 0.01, f"partial\n(to {PULL_DATE})",
+            ha="center", va="bottom", fontsize=7, color="#555")
 
     ax.set_xlabel("Trial Start Year", fontsize=11)
-    ax.set_ylabel("New Trials Registered", fontsize=11)
-    ax.set_title("GLP-1 Peptide Drug Clinical Trial Pipeline Growth (2005–2026)",
+    ax.set_ylabel("Trials started", fontsize=11)
+    ax.set_title(f"GLP-1 Interventional Trial Starts by Phase (2005–{LAST_YEAR}; {LAST_YEAR} partial)",
                  fontsize=13, fontweight="bold", pad=12)
     ax.legend(title="Phase", loc="upper left", framealpha=0.8)
-    ax.set_xlim(2004.5, 2026.5)
+    ax.set_xlim(2004.5, LAST_YEAR + 0.5)
     ax.xaxis.set_major_locator(mticker.MultipleLocator(2))
 
     fig.tight_layout()
@@ -97,7 +113,7 @@ def chart_sponsor_landscape():
     ax.set_yticklabels(sponsors, fontsize=9)
     ax.invert_yaxis()
     ax.set_xlabel("Trial Count", fontsize=11)
-    ax.set_title("Top Sponsors in GLP-1 Peptide Drug Trials",
+    ax.set_title(f"Top Sponsors in GLP-1 Interventional Trials (starts through {LAST_YEAR})",
                  fontsize=13, fontweight="bold", pad=12)
     ax.legend(loc="lower right")
 
@@ -113,99 +129,114 @@ def chart_sponsor_landscape():
 # ── Chart 3: The centerpiece timeline chart ──────────────────────────────────
 def chart_access_timeline():
     """
-    Single timeline: shortage window (shaded) + warning letter volume
-    + Lilly price cut events + new trial registrations
+    Event timeline built only from the cited, hand-entered tables:
+    shortage windows + wind-downs (shortage_status), FDA warning-letter
+    batches (enforcement_events), Lilly price/access events and FDA policy
+    (policy_events). Bottom panel: interventional trial starts per year.
     """
     conn = sqlite3.connect(DB)
-
-    # Monthly warning letters
-    wl_rows = conn.execute("""
-        SELECT SUBSTR(issue_date, 1, 7) AS month, COUNT(*) AS cnt
-        FROM warning_letters
-        WHERE issue_date >= '2023-01-01'
-        GROUP BY month
-        ORDER BY month
+    shortages = conn.execute("""
+        SELECT drug_name, shortage_start, shortage_end, wind_down_503b_end
+        FROM shortage_status ORDER BY shortage_start
     """).fetchall()
-
-    # Annual new trials for the overlay
-    trial_rows = conn.execute("""
+    batches = conn.execute("""
+        SELECT letter_date, letter_count, count_source FROM enforcement_events
+        ORDER BY letter_date
+    """).fetchall()
+    events = conn.execute("""
+        SELECT event_date, event_type, description FROM policy_events
+        WHERE event_type IN ('LILLY_ACCESS', 'LILLY_PRICE', 'FDA_PROPOSED_RULE')
+        ORDER BY event_date
+    """).fetchall()
+    trial_rows = conn.execute(f"""
         SELECT start_year, COUNT(DISTINCT nct_id) AS cnt
         FROM trials_clean
-        WHERE start_year BETWEEN 2020 AND 2026
+        WHERE start_year BETWEEN 2020 AND {LAST_YEAR}
         GROUP BY start_year
     """).fetchall()
     conn.close()
 
-    months = [r[0] for r in wl_rows]
-    counts = [r[1] for r in wl_rows]
-    x_numeric = list(range(len(months)))
-
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(13, 9), sharex=False,
+    d = date.fromisoformat
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(13, 9.5),
                                    gridspec_kw={"height_ratios": [3, 1.6]})
 
-    # ── Top panel: warning letters timeline ─────────────────────────────────
-    bars = ax1.bar(x_numeric, counts, color="#c0392b", alpha=0.75, width=0.8,
-                   label="FDA warning letters (monthly)")
+    # ── Top panel: shortage bands (left axis rows) ──────────────────────────
+    lanes = {name: i for i, (name, *_rest) in enumerate(shortages)}
+    for name, start, end, wd_end in shortages:
+        y = lanes[name]
+        ax1.barh(y, (d(end) - d(start)).days, left=d(start), height=0.5,
+                 color="#27ae60", alpha=0.45)
+        ax1.barh(y, (d(wd_end) - d(end)).days, left=d(end), height=0.5,
+                 color="#f39c12", alpha=0.45)
+        ax1.text(d(start), y + 0.33, f"{name}: {start[:7]} → {end}",
+                 fontsize=8, va="bottom")
 
-    # Shade shortage period (months in range 2022-03 to 2025-02)
-    shade_start = next((i for i, m in enumerate(months) if m >= "2022-03"), None)
-    shade_end_sem = next((i for i, m in enumerate(months) if m >= "2025-02"), len(months) - 1)
-    shade_end_tirz = next((i for i, m in enumerate(months) if m >= "2024-10"), len(months) - 1)
+    ax1.set_yticks(list(lanes.values()))
+    ax1.set_yticklabels([n.capitalize() for n in lanes], fontsize=9)
+    ax1.set_ylim(-0.6, len(lanes) + 2.4)
 
-    if shade_start is not None:
-        ax1.axvspan(shade_start - 0.5, shade_end_tirz + 0.5,
-                    alpha=0.10, color="#27ae60", zorder=0)
-        ax1.axvspan(shade_end_tirz + 0.5, shade_end_sem + 0.5,
-                    alpha=0.06, color="#f39c12", zorder=0)
+    # ── Warning-letter batches (right axis, stems) ──────────────────────────
+    ax1b = ax1.twinx()
+    for ld, n, basis in batches:
+        firm = not basis.startswith("secondary")
+        ax1b.vlines(d(ld), 0, n, color="#c0392b", linewidth=3, alpha=0.85 if firm else 0.45,
+                    linestyle="-" if firm else "--")
+        ax1b.plot(d(ld), n, "o", color="#c0392b", alpha=0.85 if firm else 0.45)
+        label = f"~{n}" if basis.startswith("approx") else f"{n}" + ("*" if not firm else "")
+        ax1b.text(d(ld), n + 2, label, ha="center", fontsize=8, color="#c0392b")
+    ax1b.set_ylim(0, 95)
+    ax1b.set_ylabel("FDA warning letters per batch", fontsize=9, color="#c0392b")
+    ax1b.spines["right"].set_visible(True)
+    ax1b.grid(False)
 
-    # Lilly price cut markers
-    price_cut_months = {"2025-02": "Lilly cuts\nZepbound price\n$399/mo vial",
-                        "2025-12": "Lilly cuts\nprice further;\nLillyDirect launch"}
-    for pm, label in price_cut_months.items():
-        idx = next((i for i, m in enumerate(months) if m == pm), None)
-        if idx is not None:
-            ax1.axvline(idx, color="#8e44ad", linestyle="--", linewidth=1.5, alpha=0.8)
-            ax1.text(idx + 0.2, max(counts) * 0.88, label,
-                     fontsize=7.5, color="#8e44ad", va="top")
+    # ── Lilly + FDA policy markers ──────────────────────────────────────────
+    short_labels = {
+        "2024-01-04": "LillyDirect\nlaunches",
+        "2024-08-27": "Zepbound vials\n\\$399 / \\$549",
+        "2025-02-25": "More vial doses;\n\\$349–\\$499",
+        "2025-12-01": "Vials cut to\n\\$299–\\$449",
+        "2026-04-30": "FDA proposes\n503B exclusion",
+    }
+    for i, (ed, etype, _desc) in enumerate(events):
+        color = "#2c3e50" if etype == "FDA_PROPOSED_RULE" else "#8e44ad"
+        ax1.axvline(d(ed), color=color, linestyle=":" if etype == "FDA_PROPOSED_RULE" else "--",
+                    linewidth=1.3, alpha=0.8)
+        ax1.text(d(ed), len(lanes) + 1.9 - (i % 2) * 0.75, short_labels.get(ed, ed),
+                 fontsize=7.5, color=color, ha="left", va="top")
 
-    # FDA policy marker
-    policy_month = "2026-04"
-    idx = next((i for i, m in enumerate(months) if m == policy_month), None)
-    if idx is not None:
-        ax1.axvline(idx, color="#2c3e50", linestyle=":", linewidth=1.5, alpha=0.9)
-        ax1.text(idx + 0.2, max(counts) * 0.60,
-                 "FDA proposes 503B\npermanent exclusion",
-                 fontsize=7.5, color="#2c3e50", va="top")
-
-    # X-axis labels (every 3 months)
-    tick_indices = [i for i, m in enumerate(months) if m.endswith(("-01", "-04", "-07", "-10"))]
-    tick_labels = [months[i] for i in tick_indices]
-    ax1.set_xticks(tick_indices)
-    ax1.set_xticklabels(tick_labels, rotation=45, ha="right", fontsize=8)
-    ax1.set_ylabel("Warning Letters Issued", fontsize=10)
-    ax1.set_title("FDA Enforcement vs. Shortage Window: GLP-1 Compounding Crackdown (2023–2026)",
+    ax1.set_xlim(d("2022-01-01"), d(PULL_DATE))
+    ax1.xaxis.set_major_locator(matplotlib.dates.MonthLocator(bymonth=(1, 7)))
+    ax1.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%Y-%m"))
+    plt.setp(ax1.get_xticklabels(), rotation=45, ha="right", fontsize=8)
+    ax1.set_title("Shortage Windows, FDA Enforcement and Lilly Pricing (cited events only)",
                   fontsize=12, fontweight="bold", pad=10)
 
     legend_patches = [
-        mpatches.Patch(color="#27ae60", alpha=0.35, label="Shortage active (compounding legal)"),
-        mpatches.Patch(color="#f39c12", alpha=0.35, label="Semaglutide shortage resolved (Oct 24–Feb 25)"),
-        mpatches.Patch(color="#c0392b", alpha=0.75, label="FDA warning letters"),
-        mpatches.Patch(color="#8e44ad", alpha=0.8, label="Eli Lilly price cuts"),
+        mpatches.Patch(color="#27ae60", alpha=0.45, label="On FDA shortage list"),
+        mpatches.Patch(color="#f39c12", alpha=0.45, label="Post-resolution wind-down (to 503B deadline)"),
+        mpatches.Patch(color="#c0392b", alpha=0.85, label="FDA warning-letter batch (* = secondary-source count)"),
+        mpatches.Patch(color="#8e44ad", alpha=0.8, label="Lilly access / price event"),
+        mpatches.Patch(color="#2c3e50", alpha=0.8, label="FDA policy"),
     ]
-    ax1.legend(handles=legend_patches, fontsize=8, loc="upper left", framealpha=0.85)
+    ax1.legend(handles=legend_patches, fontsize=7.5, loc="upper left", framealpha=0.9)
 
-    # ── Bottom panel: new trial registrations 2020-2026 ─────────────────────
+    # ── Bottom panel: interventional trial starts per year ──────────────────
     trial_years = [r[0] for r in trial_rows]
     trial_counts = [r[1] for r in trial_rows]
     colors = ["#5b9bd5" if y < 2022 else "#27ae60" if y <= 2024 else "#e67e22"
               for y in trial_years]
 
-    ax2.bar(trial_years, trial_counts, color=colors, width=0.65, edgecolor="white")
-    ax2.set_ylabel("New Trials Registered", fontsize=10)
-    ax2.set_xlabel("Year", fontsize=10)
-    ax2.set_title("New GLP-1 Trial Registrations by Year (2020–2026)", fontsize=11, pad=8)
+    bars = ax2.bar(trial_years, trial_counts, color=colors, width=0.65, edgecolor="white")
+    for bar, yr in zip(bars, trial_years):
+        if yr == LAST_YEAR:
+            bar.set_hatch("///")
+            bar.set_alpha(0.6)
+    ax2.set_ylabel("Trials started", fontsize=10)
+    ax2.set_xlabel("Start year", fontsize=10)
+    ax2.set_title(f"GLP-1 Interventional Trial Starts by Year (2020–{LAST_YEAR}; "
+                  f"{LAST_YEAR} partial, through {PULL_DATE})", fontsize=11, pad=8)
     for y, ct in zip(trial_years, trial_counts):
-        ax2.text(y, ct + 0.5, str(ct), ha="center", fontsize=9)
+        ax2.text(y, ct + 0.5, f"{ct}*" if y == LAST_YEAR else str(ct), ha="center", fontsize=9)
 
     fig.tight_layout(pad=2.5)
     fig.savefig(f"{FIGURES}/fig3_access_timeline.png", bbox_inches="tight")
