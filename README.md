@@ -50,7 +50,7 @@ New GLP-1 trial registrations roughly tripled between 2010–2015 and 2020–202
 
 ### 2. The market is highly concentrated — two companies dominate Phase 3
 
-Novo Nordisk (33.9% of all trials, 75 Phase 3) and Eli Lilly (16.4%, 65 Phase 3) account for half the registered trial activity. Academic institutions collectively run ~20% of trials, but almost entirely in Phase 2 and investigator-initiated studies. No other industry sponsor comes close to Novo or Lilly at Phase 3.
+Novo Nordisk (12.0% of all trials, 143 Phase 3) and Eli Lilly (5.2%, 71 Phase 3) are the dominant industry sponsors by trial count. Academic institutions collectively run ~20% of trials, but almost entirely in Phase 2 and investigator-initiated studies. No other industry sponsor comes close to Novo or Lilly at Phase 3.
 
 **Implication for retatrutide:** Lilly's dominance in Phase 3 is structural, not accidental — they have the infrastructure to run large multinational trials (the TRIUMPH program spans 5 Phase 3 studies with thousands of enrolled participants across multiple indications).
 
@@ -110,7 +110,7 @@ Retatrutide (LY3437943) is Eli Lilly's next-generation triple agonist (GLP-1/GIP
 
 ## Resume Bullet
 
-> *"Built a multi-source SQL/Python pipeline analyzing 1,000+ GLP-1 drug trials across FDA shortage, enforcement, and pricing data to show how a regulatory mechanism — not market forces — created the compounding drug market; used that precedent to produce a sourced, data-grounded forward assessment of Eli Lilly's likely commercialization strategy for retatrutide."*
+> *"Built a multi-source SQL/Python pipeline analyzing 3,300+ real GLP-1 drug trials (ClinicalTrials.gov API) across FDA shortage, enforcement, and pricing data to show how a regulatory mechanism — not market forces — created the compounding drug market; used that precedent to produce a sourced, data-grounded forward assessment of Eli Lilly's likely commercialization strategy for retatrutide."*
 
 ---
 
