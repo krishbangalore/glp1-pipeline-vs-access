@@ -6,11 +6,11 @@ SELECT
         MAX(CAST(SUBSTR(s.start_date,1,4) AS INT))               AS latest_trial_year
     FROM studies s
     JOIN interventions i ON s.nct_id = i.nct_id
-    WHERE i.intervention_type = 'Drug'
-      AND i.intervention_name IN (
+    WHERE LOWER(i.intervention_type) = 'drug'
+      AND LOWER(i.intervention_name) IN (
           'semaglutide','tirzepatide','liraglutide','dulaglutide',
-          'exenatide','lixisenatide','retatrutide','survodutide',
-          'pemvidutide','mazdutide'
+          'exenatide','lixisenatide','retatrutide','ly3437943',
+          'survodutide','pemvidutide','mazdutide'
       )
     GROUP BY i.intervention_name, s.phase
     ORDER BY i.intervention_name, s.phase;

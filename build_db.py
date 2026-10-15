@@ -383,7 +383,7 @@ def build_db():
         FROM studies s
         JOIN sponsors sp ON s.nct_id = sp.nct_id
         JOIN interventions i ON s.nct_id = i.nct_id
-        WHERE i.intervention_type = 'Drug'
+        WHERE LOWER(i.intervention_type) = 'drug'
     """)
 
     conn.commit()
