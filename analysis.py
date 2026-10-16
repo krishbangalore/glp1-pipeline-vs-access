@@ -1,8 +1,9 @@
 """
 GLP-1 Pipeline vs. Accessibility — Core SQL Analysis
 Runs the core sub-questions against the SQLite database.
-Trial queries use studies_in_scope / trials_clean (interventional only, starts
-through LAST_YEAR). LAST_YEAR is partial — data pulled PULL_DATE.
+All trial queries use trials_clean: one row per in-scope trial (interventional,
+testing a GLP-1 peptide, starting by LAST_YEAR). LAST_YEAR is partial — data
+pulled PULL_DATE. Phases are grouped by each trial's highest phase.
 Saves results to data/processed/ as CSVs for use in visualizations.
 """
 
@@ -10,9 +11,9 @@ import sqlite3
 import csv
 import os
 
-from build_db import DB, LAST_YEAR, PULL_DATE
-OUT = "data/processed"
-SQL_DIR = "sql"
+from build_db import ROOT, DB, LAST_YEAR, PULL_DATE
+OUT = os.path.join(ROOT, "data", "processed")
+SQL_DIR = os.path.join(ROOT, "sql")
 os.makedirs(OUT, exist_ok=True)
 os.makedirs(SQL_DIR, exist_ok=True)
 
@@ -41,20 +42,13 @@ def main():
     print("=" * 60)
 
     # ── Q1: Pipeline growth — trials started per year by phase ───────────────
-    # GROUP BY 1, 2 groups on the relabelled phase, so EARLY_Phase 1 is merged
-    # into Phase 1 (grouping on the bare `phase` name left two Phase 1 rows).
     sql_q1 = f"""
     SELECT
         start_year,
-        CASE phase
-            WHEN 'EARLY_Phase 1' THEN 'Phase 1'
-            WHEN 'NA'            THEN 'N/A'
-            ELSE phase
-        END AS phase,
-        COUNT(DISTINCT nct_id) AS trial_count
+        phase_group AS phase,
+        COUNT(*) AS trial_count
     FROM trials_clean
     WHERE start_year BETWEEN 2005 AND {LAST_YEAR}
-      AND phase NOT IN ('N/A', 'NA', '')
     GROUP BY 1, 2
     ORDER BY 1, 2;
     """
@@ -68,17 +62,14 @@ def main():
     # ── Q2: Sponsor landscape — which companies dominate? ────────────────────
     sql_q2 = """
     SELECT
-        sp.lead_sponsor_name,
-        sp.lead_sponsor_class,
-        COUNT(DISTINCT s.nct_id)                               AS total_trials,
-        SUM(CASE WHEN s.phase = 'Phase 3' THEN 1 ELSE 0 END)  AS phase3_trials,
-        ROUND(100.0 * COUNT(DISTINCT s.nct_id) /
-              (SELECT COUNT(DISTINCT nct_id) FROM studies_in_scope), 1) AS pct_of_total
-    FROM studies_in_scope s
-    JOIN sponsors sp ON s.nct_id = sp.nct_id
-    GROUP BY sp.lead_sponsor_name
-    HAVING total_trials >= 5
-    ORDER BY total_trials DESC
+        lead_sponsor_name,
+        lead_sponsor_class,
+        COUNT(*)                                                    AS total_trials,
+        SUM(CASE WHEN phase_group = 'Phase 3' THEN 1 ELSE 0 END)    AS phase3_trials,
+        ROUND(100.0 * COUNT(*) / (SELECT COUNT(*) FROM trials_clean), 1) AS pct_of_total
+    FROM trials_clean
+    GROUP BY lead_sponsor_name, lead_sponsor_class
+    ORDER BY total_trials DESC, lead_sponsor_name
     LIMIT 15;
     """
 
@@ -88,24 +79,38 @@ def main():
     for r in rows[:10]:
         print(f"  {r[0][:38]:<40} {r[2]:>7} {r[3]:>5} {r[4]:>5}%")
 
+    # ── Q2b: Industry vs non-industry, overall and in Phase 3 ───────────────
+    sql_q2b = """
+    SELECT
+        CASE WHEN lead_sponsor_class = 'INDUSTRY' THEN 'Industry' ELSE 'Non-industry' END AS sponsor_type,
+        COUNT(*)                                                       AS total_trials,
+        ROUND(100.0 * COUNT(*) / (SELECT COUNT(*) FROM trials_clean), 1) AS pct_of_all_trials,
+        SUM(CASE WHEN phase_group = 'Phase 3' THEN 1 ELSE 0 END)       AS phase3_trials,
+        ROUND(100.0 * SUM(CASE WHEN phase_group = 'Phase 3' THEN 1 ELSE 0 END) /
+              (SELECT COUNT(*) FROM trials_clean WHERE phase_group = 'Phase 3'), 1) AS pct_of_phase3
+    FROM trials_clean
+    GROUP BY 1
+    ORDER BY 1;
+    """
+
+    cols, rows = run_query(conn, "q2b_sponsor_type", sql_q2b)
+    print("\nQ2b: Industry vs non-industry")
+    for r in rows:
+        print(f"  {r[0]:<14} {r[1]:>5} trials ({r[2]}%)   {r[3]:>4} Phase 3 ({r[4]}% of Phase 3)")
+
     # ── Q3: Drug-level breakdown — each GLP-1 peptide by phase ──────────────
+    # A head-to-head trial (e.g. semaglutide vs tirzepatide) counts under both drugs.
     sql_q3 = """
     SELECT
-        i.intervention_name                                      AS drug,
-        s.phase,
-        COUNT(DISTINCT s.nct_id)                                 AS trial_count,
-        MIN(CAST(SUBSTR(s.start_date,1,4) AS INT))               AS first_trial_year,
-        MAX(CAST(SUBSTR(s.start_date,1,4) AS INT))               AS latest_trial_year
-    FROM studies_in_scope s
-    JOIN interventions i ON s.nct_id = i.nct_id
-    WHERE LOWER(i.intervention_type) = 'drug'
-      AND LOWER(i.intervention_name) IN (
-          'semaglutide','tirzepatide','liraglutide','dulaglutide',
-          'exenatide','lixisenatide','retatrutide','ly3437943',
-          'survodutide','pemvidutide','mazdutide'
-      )
-    GROUP BY i.intervention_name, s.phase
-    ORDER BY i.intervention_name, s.phase;
+        d.drug,
+        t.phase_group                AS phase,
+        COUNT(*)                     AS trial_count,
+        MIN(t.start_year)            AS first_trial_year,
+        MAX(t.start_year)            AS latest_trial_year
+    FROM trial_drugs d
+    JOIN trials_clean t ON d.nct_id = t.nct_id
+    GROUP BY d.drug, t.phase_group
+    ORDER BY d.drug, t.phase_group;
     """
 
     cols, rows = run_query(conn, "q3_drug_phase_breakdown", sql_q3)
@@ -161,7 +166,7 @@ def main():
     # ── Q6: Combined timeline — shortage + enforcement by year ───────────────
     sql_q6 = f"""
     WITH trial_counts AS (
-        SELECT start_year AS year, COUNT(DISTINCT nct_id) AS new_trials
+        SELECT start_year AS year, COUNT(*) AS new_trials
         FROM trials_clean
         WHERE start_year BETWEEN 2020 AND {LAST_YEAR}
         GROUP BY start_year

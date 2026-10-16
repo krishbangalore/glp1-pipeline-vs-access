@@ -21,8 +21,11 @@ import json
 import csv
 import time
 import os
+from datetime import date
 
 BASE_URL = "https://clinicaltrials.gov/api/v2/studies"
+ROOT = os.path.dirname(os.path.abspath(__file__))
+RAW = os.path.join(ROOT, "data", "raw")
 
 GLP1_DRUGS = [
     # Approved peptides
@@ -33,13 +36,15 @@ GLP1_DRUGS = [
     # Brand names
     "Ozempic", "Wegovy", "Mounjaro", "Zepbound",
     "Victoza", "Saxenda", "Trulicity", "Byetta",
-    # Retatrutide trial program
-    "TRIUMPH",
 ]
+# Trial-program names such as "TRIUMPH" are deliberately not searched: the
+# API treats them as free text, and "TRIUMPH" alone matched ~1,270 trials,
+# almost none of them GLP-1 trials. "retatrutide" already finds the TRIUMPH
+# trials.
 
 FIELDS = ",".join([
     "NCTId", "BriefTitle", "OverallStatus",
-    "StartDate", "PrimaryCompletionDate", "CompletionDate",
+    "StartDate", "PrimaryCompletionDate",
     "Phase", "StudyType",
     "LeadSponsorName", "LeadSponsorClass",
     "Condition",
@@ -47,7 +52,17 @@ FIELDS = ",".join([
 ])
 
 
-def fetch_page(drug, page_token=None):
+def phase_label(phases):
+    """["PHASE2", "PHASE3"] -> "Phase 2/3"; ["EARLY_PHASE1"] -> "Early Phase 1"; [] or ["NA"] -> "N/A"."""
+    phases = [p for p in phases if p != "NA"]
+    if not phases:
+        return "N/A"
+    if phases == ["EARLY_PHASE1"]:
+        return "Early Phase 1"
+    return "Phase " + "/".join(p.replace("PHASE", "") for p in phases)
+
+
+def fetch_page(drug, page_token=None, retries=3):
     params = {
         "query.intr": drug,
         "pageSize": "200",   # CT.gov allows up to 1000; 200 is safer for timeout avoidance
@@ -57,8 +72,16 @@ def fetch_page(drug, page_token=None):
         params["pageToken"] = page_token
     url = BASE_URL + "?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, headers={"User-Agent": "research-pipeline/1.0"})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode())
+    # Retry transient failures, then fail loudly: a silently skipped page would
+    # leave the dataset incomplete without anyone noticing.
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read().decode())
+        except Exception as e:
+            if attempt == retries - 1:
+                raise RuntimeError(f"Failed to fetch {drug} after {retries} attempts: {e}") from e
+            time.sleep(2 ** attempt)
 
 
 def extract_list(data, key):
@@ -82,11 +105,7 @@ def pull_all_trials():
         print(f"  Fetching: {drug}")
         page_token = None
         while True:
-            try:
-                data = fetch_page(drug, page_token)
-            except Exception as e:
-                print(f"    Error fetching {drug}: {e}")
-                break
+            data = fetch_page(drug, page_token)
 
             for s in data.get("studies", []):
                 proto = s.get("protocolSection", {})
@@ -102,19 +121,18 @@ def pull_all_trials():
                     continue
                 seen_nct.add(nct_id)
 
-                # Parse phases — can be a list like ["PHASE3"] or None
-                phases_raw = design_mod.get("phases", [])
-                phase = phases_raw[0].replace("PHASE", "Phase ") if phases_raw else "N/A"
+                # Keep every listed phase: a Phase 2/3 trial is "Phase 2/3", not "Phase 2"
+                phase = phase_label(design_mod.get("phases") or [])
 
                 start_date = (status_mod.get("startDateStruct") or {}).get("date", "")
-                completion_date = (status_mod.get("primaryCompletionDateStruct") or {}).get("date", "")
+                primary_completion_date = (status_mod.get("primaryCompletionDateStruct") or {}).get("date", "")
 
                 studies_rows.append({
                     "nct_id": nct_id,
                     "brief_title": id_mod.get("briefTitle", ""),
                     "overall_status": status_mod.get("overallStatus", ""),
                     "start_date": start_date,
-                    "completion_date": completion_date,
+                    "primary_completion_date": primary_completion_date,
                     "phase": phase,
                     "study_type": design_mod.get("studyType", ""),
                 })
@@ -159,14 +177,16 @@ if __name__ == "__main__":
     print("Pulling GLP-1 trial data from ClinicalTrials.gov API...")
     studies, sponsors, conditions, interventions = pull_all_trials()
 
-    RAW = "data/raw"
     write_csv(f"{RAW}/studies.csv", studies,
-              ["nct_id", "brief_title", "overall_status", "start_date", "completion_date", "phase", "study_type"])
+              ["nct_id", "brief_title", "overall_status", "start_date", "primary_completion_date", "phase", "study_type"])
     write_csv(f"{RAW}/sponsors.csv", sponsors,
               ["nct_id", "lead_sponsor_name", "lead_sponsor_class"])
     write_csv(f"{RAW}/conditions.csv", conditions,
               ["nct_id", "condition"])
     write_csv(f"{RAW}/interventions.csv", interventions,
               ["nct_id", "intervention_type", "intervention_name"])
+
+    with open(f"{RAW}/pull_date.txt", "w") as f:
+        f.write(date.today().isoformat() + "\n")
 
     print(f"\nDone. {len(studies)} unique trials pulled.")

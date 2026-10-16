@@ -1,5 +1,5 @@
 WITH trial_counts AS (
-        SELECT start_year AS year, COUNT(DISTINCT nct_id) AS new_trials
+        SELECT start_year AS year, COUNT(*) AS new_trials
         FROM trials_clean
         WHERE start_year BETWEEN 2020 AND 2026
         GROUP BY start_year
@@ -19,7 +19,7 @@ WITH trial_counts AS (
             WHEN t.year = 2026              THEN 'Post-shortage; FDA proposes 503B exclusion'
             ELSE 'Pre-shortage'
         END                     AS period_label,
-        CASE WHEN t.year = 2026 THEN 'partial (through 2026-10-14)'
+        CASE WHEN t.year = 2026 THEN 'partial (through 2026-10-15)'
              ELSE 'full'
         END                     AS year_coverage
     FROM trial_counts t

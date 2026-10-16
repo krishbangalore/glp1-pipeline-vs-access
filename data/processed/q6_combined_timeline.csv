@@ -1,8 +1,8 @@
 year,new_trials,warning_letters,period_label,year_coverage
-2020,96,0,Pre-shortage,full
-2021,118,0,Pre-shortage,full
-2022,121,0,Shortage active (compounding legal),full
-2023,140,0,Shortage active (compounding legal),full
-2024,163,0,Shortage active (compounding legal),full
-2025,187,50,Shortages resolved; wind-downs end; Sept letter batch,full
-2026,232,55,Post-shortage; FDA proposes 503B exclusion,partial (through 2026-10-14)
+2020,51,0,Pre-shortage,full
+2021,80,0,Pre-shortage,full
+2022,86,0,Shortage active (compounding legal),full
+2023,110,0,Shortage active (compounding legal),full
+2024,135,0,Shortage active (compounding legal),full
+2025,156,50,Shortages resolved; wind-downs end; Sept letter batch,full
+2026,207,55,Post-shortage; FDA proposes 503B exclusion,partial (through 2026-10-15)

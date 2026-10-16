@@ -24,20 +24,18 @@ This project mixes three kinds of data. They are not equally strong, so each one
 | Lilly pricing/access + FDA policy (8 events) | **Hand-entered, cited** | `policy_events` table in `build_db.py` | Company press releases / FDA press release / trade press |
 | Retatrutide commercial outlook | **Author's inference**, not data | Case study below | Forward-looking opinion |
 
-### Correction notice
-
-An earlier version of this project had a 91-row `warning_letters` table that this README described as "hand-compiled from FDA's Warning Letters database," with dates that "reflect FDA's published enforcement calendar." **That was not true.** The rows were constructed: batch totals were spread across invented per-letter dates, recipient types and violation categories, and the cited "Sept 8 2025" FDA press release does not exist. The table has been removed and replaced with `enforcement_events`, which holds only batches that can be tied to a source (listed below). Liraglutide and dulaglutide shortage rows were also removed: their dates had no source and contradicted FDA's own December 2024 status, which still listed both drugs as in shortage.
-
 ---
 
 ## Data Sources
 
-**Trial data:** downloaded from the ClinicalTrials.gov v2 public API (`clinicaltrials.gov/api/v2/studies`) using `data_pull.py`. The current `data/raw/` files were pulled on **2026-10-14**. The raw pull holds 3,328 studies. The analysis scope (the `studies_in_scope` view in `build_db.py`) keeps **2,865**:
+**Trial data:** downloaded from the ClinicalTrials.gov v2 public API (`clinicaltrials.gov/api/v2/studies`) using `data_pull.py`. The current `data/raw/` files were pulled on **2026-10-15** (recorded in `data/raw/pull_date.txt`). The raw pull holds 2,063 studies. The analysis scope (the `studies_in_scope` view in `build_db.py`) keeps **1,620**:
 
-- **Interventional studies only.** This drops 434 observational studies and 4 expanded-access records. Observational studies aren't part of a drug-development pipeline.
-- **Start dates through 2026.** This drops trials with planned start dates in 2027–28: 22 in the raw pull, of which 18 are interventional (the other 4 were already dropped as observational).
-- It also drops 7 interventional studies with no start date.
-- **2026 is a partial year.** It covers trials registered up to the pull date, including 25 whose planned start falls between the pull date and the end of 2026. It is hatched in the figures and flagged `partial` in `q6_combined_timeline.csv`. Don't compare 2026 directly with full years.
+- **Interventional studies only.** This drops 249 observational studies and 1 expanded-access record. Observational studies aren't part of a drug-development pipeline.
+- **The trial must test a GLP-1 peptide.** At least one listed intervention has to name one of the 10 peptides, by generic name, brand name, development code (e.g. LY3437943 for retatrutide) or a fixed combination (e.g. IDegLira, CagriSema). The API search also returns trials that only *mention* a GLP-1, such as diet or exercise studies in people already taking semaglutide, or exendin-4 PET imaging tracers. This rule drops 182 of those.
+- **Start dates through 2026.** This drops 10 trials with planned starts in 2027 or later and 1 with no start date.
+- **2026 is a partial year.** It covers trials registered up to the pull date, including 17 whose planned start falls between the pull date and the end of 2026. It is hatched in the figures and flagged `partial` in `q6_combined_timeline.csv`. Don't compare 2026 directly with full years.
+
+**Phases** are grouped by each trial's highest phase: a Phase 2/3 trial (30 in scope) counts as Phase 3, a Phase 1/2 trial (31) as Phase 2, and Early Phase 1 as Phase 1. The raw label is kept in the `phase` column.
 
 **FDA shortage windows** (`shortage_status`):
 
@@ -64,10 +62,10 @@ This is **not** a complete census of FDA's GLP-1 warning letters. Individual let
 
 ## Methods
 
-1. **Data acquisition:** `data_pull.py` queries the ClinicalTrials.gov v2 API for 10 GLP-1 drugs, their brand names, and "TRIUMPH". Output: 4 CSVs in `data/raw/`.
-2. **Database:** SQLite (`glp1_analysis.db`), built by `build_db.py`. Trial queries run against the `studies_in_scope` and `trials_clean` views described above.
+1. **Data acquisition:** `data_pull.py` queries the ClinicalTrials.gov v2 API's intervention field for 10 GLP-1 peptides and their brand names. Output: 4 CSVs and the pull date in `data/raw/`.
+2. **Database:** SQLite (`glp1_analysis.db`), built by `build_db.py`. Every trial query runs against `trials_clean`: one row per in-scope trial, with its lead sponsor and phase group. `trial_drugs` maps each trial to the GLP-1 peptide(s) it tests.
 3. **Hand-entered tables:** `shortage_status`, `policy_events` and `enforcement_events` are typed in from the cited sources. Every row has a `source_url`. No rows are generated or interpolated.
-4. **Analysis:** `analysis.py` runs 6 queries (saved to `sql/`) and writes results to `data/processed/`.
+4. **Analysis:** `analysis.py` runs 7 queries (saved to `sql/`) and writes results to `data/processed/`.
 5. **Visualizations:** matplotlib, 3 figures.
 
 ---
@@ -76,16 +74,16 @@ This is **not** a complete census of FDA's GLP-1 warning letters. Individual let
 
 ### 1. The pipeline has grown steadily, and Phase 3 picked up after Wegovy's approval
 
-Interventional GLP-1 drug-trial starts averaged ~78/year in 2010–2015 and ~138/year in 2020–2025, about 1.8x. 2025 alone (187) is 3.6x 2010 (52). Phase 3 starts held around 12–31/year through 2020. They then rose to 36–40/year in 2023–2025, after FDA approved Wegovy (semaglutide) for chronic weight management on **June 4, 2021**. The 2026 count (232 so far, 44 Phase 3) is partial.
+GLP-1 trial starts averaged ~58/year in 2010–2015 and ~103/year in 2020–2025, about 1.8x. 2025 alone (156) is 4.1x 2010 (38). Phase 3 starts held between 12 and 26 a year from 2010 to 2022. They then rose to 38–43 a year in 2023–2025. That rise came after FDA approved Wegovy (semaglutide) for chronic weight management on **June 4, 2021**. The 2026 count (207 so far, 46 Phase 3) is partial.
 
-**Figure 1: Interventional trial starts by phase (2005–2026; 2026 partial):**
+**Figure 1: GLP-1 trial starts by phase (2005–2026; 2026 partial):**
 ![Pipeline Growth](figures/fig1_pipeline_growth.png)
 
 ### 2. Two companies dominate industry Phase 3
 
-Novo Nordisk (322 trials, 143 Phase 3) and Eli Lilly (173 trials, 71 Phase 3) are the largest sponsors. Together they lead 37% of all 582 Phase 3 trials in scope. Non-industry sponsors (universities and hospitals) lead the majority of trials overall (~65%). Those trials are mostly Phase 4, Phase 2 and "N/A" studies, while industry leads 68% of Phase 3.
+Novo Nordisk (321 trials, 143 Phase 3) and Eli Lilly (170 trials, 70 Phase 3) are by far the largest sponsors. Together they lead 44% of the 484 Phase 3 trials in scope, and 61% of industry-led Phase 3. Overall, the field splits almost evenly: industry leads 50% of trials, and universities, hospitals and governments lead the other 50%. Phase 3 is different. Industry leads 72% of Phase 3 trials, while non-industry sponsors mostly run Phase 4, Phase 2 and no-phase studies.
 
-**Implication for retatrutide:** Lilly has the infrastructure to run large multinational programs. The pull contains 14 Phase 3 retatrutide trials, started 2023–2026.
+**Implication for retatrutide:** Lilly has the infrastructure to run large multinational programs. The pull contains 32 retatrutide trials, including 14 Phase 3 trials started 2023–2026.
 
 **Figure 2: Sponsor landscape:**
 ![Sponsor Landscape](figures/fig2_sponsor_landscape.png)
@@ -101,7 +99,7 @@ After the wind-downs ended, FDA's documented GLP-1 enforcement came in batches a
 
 ### 4. Lilly cut self-pay prices while tirzepatide was still in shortage
 
-Lilly launched LillyDirect in **January 2024**. It began selling Zepbound single-dose vials there at **$399 (2.5 mg) and $549 (5 mg) on Aug 27, 2024**, about half the pen list price. That was while tirzepatide was still on the shortage list and compounded copies were legal. Lilly added higher-dose vials at $499 in **February 2025** and cut vial prices to **$299–$449 on Dec 1, 2025**.
+Lilly launched LillyDirect in **January 2024**. It began selling Zepbound single-dose vials there at **$399 (2.5 mg) and $549 (5 mg) on Aug 27, 2024**, roughly half or less of the pen's ~$1,060 monthly list price. That was while tirzepatide was still on the shortage list and compounded copies were legal. Lilly added higher-dose vials at $499 in **February 2025** and cut vial prices to **$299–$449 on Dec 1, 2025**.
 
 The sequence: shortage listing → legal compounding market → Lilly self-pay vial pricing (Aug 2024) → shortage resolved (Dec 2024 / Feb 2025) → wind-downs end (Mar / May 2025) → FDA warning-letter batches on compounded-GLP-1 marketing (Sep 2025 onward) → proposed 503B bulks exclusion (Apr 2026). The ordering is documented. The causal links between steps are the author's interpretation (see Limitations).
 
@@ -115,7 +113,7 @@ The sequence: shortage listing → legal compounding market → Lilly self-pay v
 > **This section is the author's inference.** The trial facts and Lilly announcements are sourced. The forecasts about pricing and launch strategy are opinion, not data.
 
 Retatrutide (LY3437943) is Lilly's triple agonist (GLP-1/GIP/glucagon). Sourced facts:
-- 14 Phase 3 trials in this ClinicalTrials.gov pull, started 2023–2026
+- 32 trials in this ClinicalTrials.gov pull, including 14 Phase 3 trials started 2023–2026
 - TRIUMPH-1 topline results announced **May 21, 2026**; TRIUMPH-2 and TRIUMPH-3 announced **July 23, 2026**
 - Lilly says it plans to submit a Biologics License Application to FDA in **Q1 2027**
 
@@ -133,7 +131,9 @@ Retatrutide (LY3437943) is Lilly's triple agonist (GLP-1/GIP/glucagon). Sourced 
 
 ## Limitations
 
-- Trial counts reflect what was registered at pull time (2026-10-14). Some trials may be missed if the drug-name search didn't match them. `trials_clean` counts only trials with at least one "Drug" intervention. 2026 is a partial year.
+- Trial counts reflect what was registered at pull time (2026-10-15). 2026 is a partial year.
+- Trials are kept only if an intervention name matches a known name, code or combination for one of the 10 peptides (`DRUG_PATTERNS` in `build_db.py`). A trial that registered its GLP-1 under an unlisted code name would be missed. Trials that use a GLP-1 only as a comparator are counted.
+- Counts are trial registrations, not commercial strategy. They show where research effort goes, not how any company prices.
 - The warning-letter table holds three documented batches, not every GLP-1 warning letter. One count is approximate and one comes from a secondary source.
 - Shortage start dates are month-precision for semaglutide (FDA's order gives only "March 2022").
 - None of this establishes causation. The timing of shortage resolution, enforcement and price cuts is consistent with the story above. But there are confounders: PBM negotiations, the November 2025 federal pricing agreements, and manufacturing expansion.
@@ -143,7 +143,7 @@ Retatrutide (LY3437943) is Lilly's triple agonist (GLP-1/GIP/glucagon). Sourced 
 
 ## Resume Bullet
 
-> *"Built a SQL/Python pipeline over 2,865 interventional GLP-1 trials (ClinicalTrials.gov API) joined with hand-entered, source-cited FDA shortage, enforcement and pricing events, showing how a regulatory mechanism (the shortage listing) enabled the compounded-drug market; used that precedent for a clearly labelled forward assessment of Eli Lilly's retatrutide commercialization."*
+> *"Built a SQL/Python pipeline over 1,620 interventional GLP-1 trials (ClinicalTrials.gov API) joined with hand-entered, source-cited FDA shortage, enforcement and pricing events, showing how a regulatory mechanism (the shortage listing) enabled the compounded-drug market; used that precedent for a clearly labelled forward assessment of Eli Lilly's retatrutide commercialization."*
 
 ---
 
@@ -151,15 +151,16 @@ Retatrutide (LY3437943) is Lilly's triple agonist (GLP-1/GIP/glucagon). Sourced 
 
 ```
 glp1-pipeline-vs-access/
+├── requirements.txt        # matplotlib (everything else is the standard library)
 ├── data_pull.py            # Downloads trial data from ClinicalTrials.gov API → data/raw/
 ├── build_db.py             # Loads trials into SQLite; hand-entered cited tables; scope views
 ├── analysis.py             # Runs SQL queries; saves results to data/processed/
 ├── visualize.py            # Creates 3 figures
 ├── glp1_analysis.db        # Built database
 ├── data/
-│   ├── raw/                # studies.csv, sponsors.csv, conditions.csv, interventions.csv
-│   └── processed/          # q1–q6 result CSVs (q5 = q5_enforcement_events.csv)
-├── sql/                    # Saved SQL query files (q1–q6)
+│   ├── raw/                # studies.csv, sponsors.csv, conditions.csv, interventions.csv, pull_date.txt
+│   └── processed/          # Query result CSVs (q1, q2, q2b, q3–q6)
+├── sql/                    # Saved SQL query files, one per result CSV
 ├── figures/                # fig1_pipeline_growth.png, fig2_sponsor_landscape.png,
 │                           # fig3_access_timeline.png
 └── README.md
@@ -170,9 +171,9 @@ glp1-pipeline-vs-access/
 ## Running This Project
 
 ```bash
-pip install matplotlib
+pip install -r requirements.txt
 python data_pull.py    # downloads trial data from ClinicalTrials.gov (~2-4 min)
-python build_db.py     # builds glp1_analysis.db (update PULL_DATE if you re-pull)
+python build_db.py     # builds glp1_analysis.db
 python analysis.py     # runs SQL queries, saves data/processed/
 python visualize.py    # creates figures/
 ```
@@ -195,3 +196,11 @@ python visualize.py    # creates figures/
 - Fierce Pharma, Lilly cuts Zepbound vial prices (Dec 2025): https://www.fiercepharma.com/marketing/lilly-joins-novo-glp-1-self-pay-price-cuts-lowering-costs-single-dose-zepbound-vials
 - Lilly, TRIUMPH-1 topline (May 21, 2026) and TRIUMPH-2/3 topline (Jul 23, 2026): investor.lilly.com
 - Jastreboff et al. (2023), NEJM: retatrutide Phase 2 results
+
+---
+
+## Corrections Log
+
+**Trial search (Oct 2026).** Earlier versions also searched the API for "TRIUMPH", the name of Lilly's retatrutide trial program. The API treats that as free text, and it matched ~1,270 trials, almost none of them GLP-1 trials (povidone-iodine, radioiodine and cataract-surgery studies, among others). About 1,070 of the previous 2,865 in-scope trials came in only through that term, and they pushed several academic centers into the top-sponsor list. The term has been removed, since "retatrutide" already finds the TRIUMPH trials. The scope now also requires a GLP-1 peptide among each trial's interventions. In addition, multi-phase trials were previously labelled by their first phase only (a Phase 2/3 trial counted as Phase 2); they now keep their full label and are grouped by highest phase. All figures and numbers above reflect these fixes.
+
+**Warning-letter data.** An earlier version of this project had a 91-row `warning_letters` table that this README described as "hand-compiled from FDA's Warning Letters database," with dates that "reflect FDA's published enforcement calendar." **That was not true.** The rows were constructed: batch totals were spread across invented per-letter dates, recipient types and violation categories, and the cited "Sept 8 2025" FDA press release does not exist. The table has been removed and replaced with `enforcement_events`, which holds only batches that can be tied to a source (listed above). Liraglutide and dulaglutide shortage rows were also removed: their dates had no source and contradicted FDA's own December 2024 status, which still listed both drugs as in shortage.

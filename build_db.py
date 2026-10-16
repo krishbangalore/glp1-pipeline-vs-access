@@ -9,13 +9,41 @@ import sqlite3
 import csv
 import os
 
-DB = "glp1_analysis.db"
-RAW = "data/raw"
+ROOT = os.path.dirname(os.path.abspath(__file__))
+DB = os.path.join(ROOT, "glp1_analysis.db")
+RAW = os.path.join(ROOT, "data", "raw")
 
 # Last start year kept in the analysis. Trials with planned starts after this
-# are dropped. 2026 itself is partial: data/raw/ was pulled on PULL_DATE.
+# are dropped. 2026 itself is partial: data/raw/ was pulled on PULL_DATE,
+# which data_pull.py records in data/raw/pull_date.txt.
 LAST_YEAR = 2026
-PULL_DATE = "2026-10-14"
+with open(os.path.join(RAW, "pull_date.txt")) as _f:
+    PULL_DATE = _f.read().strip()
+
+# Which GLP-1 peptide each intervention name refers to. A trial is in scope
+# only if at least one of its interventions matches one of these patterns
+# (generic name, brand name, development code, or a fixed combination that
+# contains the peptide). The CT.gov API search also returns trials that only
+# mention a GLP-1 elsewhere (diet studies in people taking semaglutide,
+# exendin-4 PET imaging tracers, etc.); matching on intervention name keeps
+# those out. Misspellings below were found in the registry data itself.
+# Orforglipron is excluded by design: it is a small molecule, not a peptide.
+DRUG_PATTERNS = {
+    "semaglutide":  ["%semaglutid%", "%ozempic%", "%wegovy%", "%rybelsus%",
+                     "%nn9535%", "%nn9536%", "%nn9924%", "%cagrisema%", "%icosema%"],
+    "tirzepatide":  ["%tirzepatide%", "%tirzapatide%", "%trizepatide%", "%mounjaro%",
+                     "%zepbound%", "%ly3298176%"],
+    "liraglutide":  ["%liraglutide%", "%victoza%", "%saxenda%", "%nn2211%",
+                     "%ideglira%", "%xultophy%"],
+    "dulaglutide":  ["%dulaglutide%", "%trulicity%", "%ly2189265%"],
+    "exenatide":    ["%exenatide%", "%byetta%", "%bydureon%", "%ac2993%"],
+    "lixisenatide": ["%lixisenatide%", "%adlyxin%", "%lyxumia%", "%ave0010%",
+                     "%iglarlixi%", "%soliqua%"],
+    "retatrutide":  ["%retatrutide%", "%ly3437943%"],
+    "survodutide":  ["%survodutide%", "%bi 456906%", "%bi456906%"],
+    "pemvidutide":  ["%pemvidutide%", "%alt-801%"],
+    "mazdutide":    ["%mazdutide%", "%ly3305677%", "%ibi362%"],
+}
 
 
 def load_csv(path):
@@ -39,7 +67,7 @@ def build_db():
             brief_title     TEXT,
             overall_status  TEXT,
             start_date      TEXT,
-            completion_date TEXT,
+            primary_completion_date TEXT,
             phase           TEXT,
             study_type      TEXT
         )
@@ -74,7 +102,7 @@ def build_db():
     for row in load_csv(f"{RAW}/studies.csv"):
         c.execute("INSERT INTO studies VALUES (?,?,?,?,?,?,?)",
                   (row["nct_id"], row["brief_title"], row["overall_status"],
-                   row["start_date"], row["completion_date"], row["phase"], row["study_type"]))
+                   row["start_date"], row["primary_completion_date"], row["phase"], row["study_type"]))
 
     for row in load_csv(f"{RAW}/sponsors.csv"):
         c.execute("INSERT INTO sponsors VALUES (?,?,?)",
@@ -226,23 +254,42 @@ def build_db():
     print(f"  Loaded {c.execute('SELECT COUNT(*) FROM shortage_status').fetchone()[0]} shortage records")
     print(f"  Loaded {c.execute('SELECT COUNT(*) FROM enforcement_events').fetchone()[0]} enforcement events")
 
+    # ── GLP-1 drug matching ──────────────────────────────────────────────────
+    c.execute("CREATE TABLE drug_patterns (drug TEXT, pattern TEXT)")
+    c.executemany("INSERT INTO drug_patterns VALUES (?,?)",
+                  [(drug, pat) for drug, pats in DRUG_PATTERNS.items() for pat in pats])
+
+    # One row per (trial, GLP-1 drug) pair. A head-to-head trial such as
+    # semaglutide vs tirzepatide appears once under each drug.
+    c.execute("""
+        CREATE VIEW trial_drugs AS
+        SELECT DISTINCT i.nct_id, p.drug
+        FROM interventions i
+        JOIN drug_patterns p ON LOWER(i.intervention_name) LIKE p.pattern
+    """)
+
     # ── Analysis scope ───────────────────────────────────────────────────────
-    # The raw pull keeps everything; analysis uses only:
-    #   - interventional studies (drops 434 observational + 4 expanded-access)
-    #   - start dates through LAST_YEAR (drops 18 interventional trials with planned
-    #     starts in 2027–28, plus 7 with no start date)
-    # 2026 is a partial year: it covers registrations up to the pull date
-    # (PULL_DATE) and includes trials whose planned start is later in 2026.
+    # The raw pull keeps everything; analysis uses only trials that are:
+    #   - interventional (not observational or expanded access)
+    #   - testing a GLP-1 peptide (see DRUG_PATTERNS)
+    #   - starting by LAST_YEAR (planned 2027+ starts and missing start dates dropped)
+    # 2026 is a partial year: it covers registrations up to PULL_DATE and
+    # includes trials whose planned start is later in 2026.
     c.execute(f"""
         CREATE VIEW studies_in_scope AS
         SELECT *
         FROM studies
         WHERE study_type = 'INTERVENTIONAL'
+          AND nct_id IN (SELECT nct_id FROM trial_drugs)
           AND start_date <> ''
           AND CAST(SUBSTR(start_date, 1, 4) AS INTEGER) <= {LAST_YEAR}
     """)
 
-    # ── Core joined view ─────────────────────────────────────────────────────
+    # ── Core trial-level view: one row per trial ────────────────────────────
+    # phase_group assigns each trial its highest phase, so a Phase 2/3 trial
+    # counts as Phase 3 and a Phase 1/2 trial as Phase 2. Early Phase 1 is
+    # grouped with Phase 1. Trials with no phase (CT.gov "N/A", e.g. some
+    # device or behavioral arms) are kept as "N/A".
     c.execute("""
         CREATE VIEW trials_clean AS
         SELECT
@@ -251,19 +298,28 @@ def build_db():
             s.overall_status,
             CAST(SUBSTR(s.start_date, 1, 4) AS INTEGER) AS start_year,
             s.start_date,
-            s.completion_date,
+            s.primary_completion_date,
             s.phase,
+            CASE
+                WHEN s.phase LIKE '%3%'             THEN 'Phase 3'
+                WHEN s.phase = 'Phase 4'            THEN 'Phase 4'
+                WHEN s.phase LIKE '%2%'             THEN 'Phase 2'
+                WHEN s.phase LIKE '%1%'             THEN 'Phase 1'
+                ELSE 'N/A'
+            END AS phase_group,
             sp.lead_sponsor_name,
-            sp.lead_sponsor_class,
-            i.intervention_name
+            sp.lead_sponsor_class
         FROM studies_in_scope s
         JOIN sponsors sp ON s.nct_id = sp.nct_id
-        JOIN interventions i ON s.nct_id = i.nct_id
-        WHERE LOWER(i.intervention_type) = 'drug'
     """)
 
-    print(f"  In scope: {c.execute('SELECT COUNT(*) FROM studies_in_scope').fetchone()[0]} interventional studies "
-          f"starting ≤ {LAST_YEAR}")
+    n_raw = c.execute("SELECT COUNT(*) FROM studies").fetchone()[0]
+    n_int = c.execute("SELECT COUNT(*) FROM studies WHERE study_type = 'INTERVENTIONAL'").fetchone()[0]
+    n_glp = c.execute("""SELECT COUNT(*) FROM studies WHERE study_type = 'INTERVENTIONAL'
+                         AND nct_id IN (SELECT nct_id FROM trial_drugs)""").fetchone()[0]
+    n_scope = c.execute("SELECT COUNT(*) FROM studies_in_scope").fetchone()[0]
+    print(f"  Scope: {n_raw} pulled -> {n_int} interventional -> {n_glp} testing a GLP-1 peptide "
+          f"-> {n_scope} starting <= {LAST_YEAR} (pulled {PULL_DATE})")
 
     conn.commit()
     conn.close()

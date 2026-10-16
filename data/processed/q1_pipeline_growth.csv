@@ -1,89 +1,108 @@
 start_year,phase,trial_count
-2005,Phase 1,9
-2005,Phase 2,8
-2005,Phase 3,10
-2005,Phase 4,1
-2006,Phase 1,10
-2006,Phase 2,7
-2006,Phase 3,17
-2006,Phase 4,3
-2007,Phase 1,8
-2007,Phase 2,9
-2007,Phase 3,7
+2005,Phase 1,6
+2005,Phase 2,4
+2005,Phase 3,1
+2006,Phase 1,8
+2006,Phase 2,4
+2006,Phase 3,16
+2006,Phase 4,2
+2007,N/A,1
+2007,Phase 1,6
+2007,Phase 2,5
+2007,Phase 3,4
 2007,Phase 4,6
-2008,Phase 1,8
-2008,Phase 2,11
-2008,Phase 3,25
-2008,Phase 4,13
-2009,Phase 1,13
-2009,Phase 2,9
-2009,Phase 3,14
-2009,Phase 4,12
-2010,Phase 1,8
-2010,Phase 2,11
-2010,Phase 3,11
-2010,Phase 4,11
-2011,Phase 1,16
-2011,Phase 2,11
-2011,Phase 3,17
-2011,Phase 4,9
-2012,Phase 1,13
-2012,Phase 2,10
-2012,Phase 3,25
-2012,Phase 4,22
-2013,Phase 1,18
+2008,N/A,2
+2008,Phase 1,4
+2008,Phase 2,5
+2008,Phase 3,21
+2008,Phase 4,10
+2009,N/A,2
+2009,Phase 1,11
+2009,Phase 2,5
+2009,Phase 3,15
+2009,Phase 4,8
+2010,N/A,5
+2010,Phase 1,5
+2010,Phase 2,7
+2010,Phase 3,12
+2010,Phase 4,9
+2011,N/A,10
+2011,Phase 1,14
+2011,Phase 2,4
+2011,Phase 3,14
+2011,Phase 4,7
+2012,N/A,5
+2012,Phase 1,11
+2012,Phase 2,7
+2012,Phase 3,24
+2012,Phase 4,18
+2013,N/A,1
+2013,Phase 1,14
 2013,Phase 2,10
-2013,Phase 3,31
-2013,Phase 4,22
-2014,Phase 1,24
-2014,Phase 2,19
-2014,Phase 3,17
-2014,Phase 4,34
-2015,Phase 1,8
-2015,Phase 2,20
-2015,Phase 3,12
-2015,Phase 4,20
-2016,Phase 1,17
-2016,Phase 2,14
-2016,Phase 3,26
-2016,Phase 4,24
-2017,Phase 1,20
-2017,Phase 2,20
-2017,Phase 3,24
-2017,Phase 4,31
-2018,Phase 1,19
-2018,Phase 2,9
-2018,Phase 3,19
-2018,Phase 4,19
-2019,Phase 1,28
-2019,Phase 2,20
-2019,Phase 3,25
-2019,Phase 4,24
-2020,Phase 1,29
-2020,Phase 2,18
-2020,Phase 3,22
-2020,Phase 4,16
-2021,Phase 1,21
-2021,Phase 2,27
-2021,Phase 3,30
-2021,Phase 4,25
-2022,Phase 1,25
-2022,Phase 2,22
-2022,Phase 3,25
-2022,Phase 4,31
-2023,Phase 1,28
-2023,Phase 2,29
-2023,Phase 3,36
-2023,Phase 4,28
-2024,Phase 1,37
-2024,Phase 2,38
-2024,Phase 3,38
-2024,Phase 4,34
-2025,Phase 1,27
-2025,Phase 2,57
-2025,Phase 3,40
-2025,Phase 4,46
-2026,Phase 1,36
-2026,Phase 2,69
-2026,Phase 3,44
-2026,Phase 4,55
+2013,Phase 3,21
+2013,Phase 4,18
+2014,N/A,5
+2014,Phase 1,19
+2014,Phase 2,10
+2014,Phase 3,18
+2014,Phase 4,29
+2015,N/A,7
+2015,Phase 1,5
+2015,Phase 2,11
+2015,Phase 3,13
+2015,Phase 4,17
+2016,N/A,7
+2016,Phase 1,13
+2016,Phase 2,12
+2016,Phase 3,23
+2016,Phase 4,23
+2017,N/A,1
+2017,Phase 1,12
+2017,Phase 2,14
+2017,Phase 3,19
+2017,Phase 4,17
+2018,N/A,2
+2018,Phase 1,12
+2018,Phase 2,4
+2018,Phase 3,17
+2018,Phase 4,10
+2019,N/A,7
+2019,Phase 1,18
+2019,Phase 2,12
+2019,Phase 3,26
+2019,Phase 4,18
+2020,N/A,3
+2020,Phase 1,17
+2020,Phase 2,7
+2020,Phase 3,15
+2020,Phase 4,9
+2021,N/A,2
+2021,Phase 1,12
+2021,Phase 2,25
+2021,Phase 3,25
+2021,Phase 4,16
+2022,N/A,8
+2022,Phase 1,21
+2022,Phase 2,13
+2022,Phase 3,22
+2022,Phase 4,22
+2023,N/A,9
+2023,Phase 1,20
+2023,Phase 2,24
+2023,Phase 3,38
+2023,Phase 4,19
+2024,N/A,7
+2024,Phase 1,29
+2024,Phase 2,36
+2024,Phase 3,39
+2024,Phase 4,24
+2025,N/A,11
+2025,Phase 1,19
+2025,Phase 2,45
+2025,Phase 3,43
+2025,Phase 4,38
+2026,N/A,31
+2026,Phase 1,26
+2026,Phase 2,57
+2026,Phase 3,46
+2026,Phase 4,47

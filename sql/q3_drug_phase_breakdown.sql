@@ -1,16 +1,10 @@
 SELECT
-        i.intervention_name                                      AS drug,
-        s.phase,
-        COUNT(DISTINCT s.nct_id)                                 AS trial_count,
-        MIN(CAST(SUBSTR(s.start_date,1,4) AS INT))               AS first_trial_year,
-        MAX(CAST(SUBSTR(s.start_date,1,4) AS INT))               AS latest_trial_year
-    FROM studies_in_scope s
-    JOIN interventions i ON s.nct_id = i.nct_id
-    WHERE LOWER(i.intervention_type) = 'drug'
-      AND LOWER(i.intervention_name) IN (
-          'semaglutide','tirzepatide','liraglutide','dulaglutide',
-          'exenatide','lixisenatide','retatrutide','ly3437943',
-          'survodutide','pemvidutide','mazdutide'
-      )
-    GROUP BY i.intervention_name, s.phase
-    ORDER BY i.intervention_name, s.phase;
+        d.drug,
+        t.phase_group                AS phase,
+        COUNT(*)                     AS trial_count,
+        MIN(t.start_year)            AS first_trial_year,
+        MAX(t.start_year)            AS latest_trial_year
+    FROM trial_drugs d
+    JOIN trials_clean t ON d.nct_id = t.nct_id
+    GROUP BY d.drug, t.phase_group
+    ORDER BY d.drug, t.phase_group;

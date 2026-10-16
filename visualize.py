@@ -15,8 +15,9 @@ from collections import defaultdict
 import os
 from datetime import date
 
-from build_db import DB, LAST_YEAR, PULL_DATE
-FIGURES = "figures"
+from build_db import ROOT, DB, LAST_YEAR, PULL_DATE
+FIGURES = os.path.join(ROOT, "figures")
+PROCESSED = os.path.join(ROOT, "data", "processed")
 os.makedirs(FIGURES, exist_ok=True)
 
 PALETTE = {
@@ -24,6 +25,7 @@ PALETTE = {
     "Phase 2": "#5b9bd5",
     "Phase 3": "#1f5fa6",
     "Phase 4": "#0d3b66",
+    "N/A":     "#c8c8c8",
 }
 
 plt.rcParams.update({
@@ -48,10 +50,10 @@ def year_pos(d):
 
 # ── Chart 1: Trial pipeline growth by year (stacked bar by phase) ───────────
 def chart_pipeline_growth():
-    rows = load_csv("data/processed/q1_pipeline_growth.csv")
+    rows = load_csv(os.path.join(PROCESSED, "q1_pipeline_growth.csv"))
 
     years = sorted(set(int(r["start_year"]) for r in rows))
-    phases = ["Phase 1", "Phase 2", "Phase 3", "Phase 4"]
+    phases = ["Phase 1", "Phase 2", "Phase 3", "Phase 4", "N/A"]
     data = {ph: [] for ph in phases}
 
     for year in years:
@@ -64,7 +66,7 @@ def chart_pipeline_growth():
     bottoms = [0] * len(years)
     for ph in phases:
         bars = ax.bar(years, data[ph], bottom=bottoms,
-                      label=ph, color=PALETTE[ph], width=0.75, edgecolor="white", linewidth=0.5)
+                      label="No phase (N/A)" if ph == "N/A" else ph, color=PALETTE[ph], width=0.75, edgecolor="white", linewidth=0.5)
         # LAST_YEAR is a partial year — hatch it so it doesn't read as a full-year count
         for bar, yr in zip(bars, years):
             if yr == LAST_YEAR:
@@ -85,7 +87,7 @@ def chart_pipeline_growth():
     ax.set_ylabel("Trials started", fontsize=11)
     ax.set_title(f"GLP-1 Interventional Trial Starts by Phase (2005–{LAST_YEAR}; {LAST_YEAR} partial)",
                  fontsize=13, fontweight="bold", pad=12)
-    ax.legend(title="Phase", loc="upper left", framealpha=0.8)
+    ax.legend(title="Highest phase", loc="upper left", framealpha=0.8)
     ax.set_xlim(2004.5, LAST_YEAR + 0.5)
     ax.xaxis.set_major_locator(mticker.MultipleLocator(2))
 
@@ -97,7 +99,7 @@ def chart_pipeline_growth():
 
 # ── Chart 2: Sponsor landscape (horizontal bar, top 10) ─────────────────────
 def chart_sponsor_landscape():
-    rows = load_csv("data/processed/q2_sponsor_landscape.csv")
+    rows = load_csv(os.path.join(PROCESSED, "q2_sponsor_landscape.csv"))
     rows = rows[:10]
 
     sponsors = [r["lead_sponsor_name"][:35] for r in rows]
@@ -107,7 +109,7 @@ def chart_sponsor_landscape():
 
     fig, ax = plt.subplots(figsize=(10, 6))
     y = range(len(sponsors))
-    ax.barh(y, other, label="Phase 1/2/4", color="#a8c8e8")
+    ax.barh(y, other, label="All other trials", color="#a8c8e8")
     ax.barh(y, ph3, left=other, label="Phase 3", color="#1f5fa6")
     ax.set_yticks(list(y))
     ax.set_yticklabels(sponsors, fontsize=9)
@@ -149,7 +151,7 @@ def chart_access_timeline():
         ORDER BY event_date
     """).fetchall()
     trial_rows = conn.execute(f"""
-        SELECT start_year, COUNT(DISTINCT nct_id) AS cnt
+        SELECT start_year, COUNT(*) AS cnt
         FROM trials_clean
         WHERE start_year BETWEEN 2020 AND {LAST_YEAR}
         GROUP BY start_year
@@ -236,7 +238,13 @@ def chart_access_timeline():
     ax2.set_title(f"GLP-1 Interventional Trial Starts by Year (2020–{LAST_YEAR}; "
                   f"{LAST_YEAR} partial, through {PULL_DATE})", fontsize=11, pad=8)
     for y, ct in zip(trial_years, trial_counts):
-        ax2.text(y, ct + 0.5, f"{ct}*" if y == LAST_YEAR else str(ct), ha="center", fontsize=9)
+        ax2.text(y, ct + 0.5, f"{ct} (partial)" if y == LAST_YEAR else str(ct), ha="center", fontsize=9)
+    ax2.set_ylim(0, max(trial_counts) * 1.15)
+    ax2.legend(handles=[
+        mpatches.Patch(color="#5b9bd5", label="Before shortages"),
+        mpatches.Patch(color="#27ae60", label="Shortage active (2022–2024)"),
+        mpatches.Patch(color="#e67e22", label="After resolution (2025–)"),
+    ], fontsize=8, loc="upper left", framealpha=0.9)
 
     fig.tight_layout(pad=2.5)
     fig.savefig(f"{FIGURES}/fig3_access_timeline.png", bbox_inches="tight")
